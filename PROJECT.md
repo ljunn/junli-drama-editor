@@ -123,6 +123,10 @@ python3 scripts/episode_pipeline.py compose-scenes <项目目录> --episode-num 
 python3 scripts/episode_pipeline.py compose-shots <项目目录> --episode-num <集数> --scene-num <场景号> --shot-num <镜头号>
 ```
 
+如果不传 `--scene-num`，`compose-scenes` 也只会挑“下一个缺失场景”生成 1 个 prompt，不会批量生成整集所有场景。
+
+如果不传 `--shot-num`，`compose-shots` 也只会挑“当前场下一个缺失镜头”生成 1 个 prompt，不会批量生成整个场的所有镜头。
+
 它会按当前 `场景节奏卡` 在单集目录下生成多个 Prompt Pack：
 
 - `runtime/episode-XXXX/plan.md`

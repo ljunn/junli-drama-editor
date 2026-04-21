@@ -4,6 +4,8 @@
 
 默认应使用 `compose-scenes` 先生成单场 Prompt Pack，再用 `compose-shots` 继续拆成单镜头 Prompt Pack，不要硬写整集。
 
+这两个命令默认也只能各自生成 1 个下一个缺失项，不要指望它们一次性吐完整场/整集。
+
 只有在你明确需要整集输出时，才手动使用：
 
 ```bash

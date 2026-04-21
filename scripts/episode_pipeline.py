@@ -492,6 +492,13 @@ def find_scene_output_file(project_dir: Path, episode_num: int, scene_num: int) 
     return None
 
 
+def scene_prompt_exists(project_dir: Path, episode_num: int, scene_num: int) -> bool:
+    return (
+        scene_prompt_output_path_for_episode(project_dir, episode_num, scene_num).exists()
+        or legacy_scene_prompt_path_for_episode(project_dir, episode_num, scene_num).exists()
+    )
+
+
 def shot_output_candidates(project_dir: Path, episode_num: int, scene_num: int, shot_num: int) -> list[Path]:
     candidates = [
         shot_output_path_for_episode(project_dir, episode_num, scene_num, shot_num, ".md"),
@@ -524,6 +531,27 @@ def find_shot_output_files(project_dir: Path, episode_num: int, scene_num: int) 
         if shot_num not in shot_files:
             shot_files[shot_num] = path
     return sorted(shot_files.items(), key=lambda item: item[0])
+
+
+def shot_output_exists(project_dir: Path, episode_num: int, scene_num: int, shot_num: int) -> bool:
+    return any(path.exists() for path in shot_output_candidates(project_dir, episode_num, scene_num, shot_num))
+
+
+def next_missing_scene_num(project_dir: Path, episode_num: int, available_scene_nums: list[int]) -> int:
+    for scene_num in available_scene_nums:
+        if not find_scene_output_file(project_dir, episode_num, scene_num):
+            return scene_num
+    for scene_num in available_scene_nums:
+        if not scene_prompt_exists(project_dir, episode_num, scene_num):
+            return scene_num
+    return available_scene_nums[0]
+
+
+def next_missing_shot_num(project_dir: Path, episode_num: int, scene_num: int, available_shot_nums: list[int]) -> int:
+    for shot_num in available_shot_nums:
+        if not shot_output_exists(project_dir, episode_num, scene_num, shot_num):
+            return shot_num
+    return available_shot_nums[0]
 
 
 def stitched_scene_path_for_episode(project_dir: Path, episode_num: int) -> Path:
@@ -1661,24 +1689,23 @@ def command_compose_scenes(args: argparse.Namespace) -> int:
         print(f"Compose-scenes 失败：场景{args.scene_num} 不在当前场景卡里。")
         return 1
 
-    target_scene_nums = [args.scene_num] if args.scene_num else available_scene_nums
+    selected_scene_num = args.scene_num if args.scene_num is not None else next_missing_scene_num(project_dir, args.episode_num, available_scene_nums)
     generated_paths: list[Path] = []
-    update_task_log_status(project_dir, args.episode_num, title, "分场创作中")
-    for scene_num in target_scene_nums:
-        prompt_path = scene_prompt_output_path_for_episode(project_dir, args.episode_num, scene_num)
-        prompt_path.write_text(
-            build_scene_prompt_pack(
-                project_dir,
-                args.episode_num,
-                scene_num,
-                title,
-                core_event,
-                args.target_duration,
-                args.shot_seconds,
-            ),
-            encoding="utf-8",
-        )
-        generated_paths.append(prompt_path)
+    update_task_log_status(project_dir, args.episode_num, title, f"分场创作中 / 场景{selected_scene_num}")
+    prompt_path = scene_prompt_output_path_for_episode(project_dir, args.episode_num, selected_scene_num)
+    prompt_path.write_text(
+        build_scene_prompt_pack(
+            project_dir,
+            args.episode_num,
+            selected_scene_num,
+            title,
+            core_event,
+            args.target_duration,
+            args.shot_seconds,
+        ),
+        encoding="utf-8",
+    )
+    generated_paths.append(prompt_path)
 
     for path in generated_paths:
         print(path)
@@ -1732,24 +1759,23 @@ def command_compose_shots(args: argparse.Namespace) -> int:
         print(f"Compose-shots 失败：镜头{args.shot_num} 不在当前场的镜头拆分表里。")
         return 1
 
-    target_shot_nums = [args.shot_num] if args.shot_num else available_shot_nums
+    selected_shot_num = args.shot_num if args.shot_num is not None else next_missing_shot_num(project_dir, args.episode_num, args.scene_num, available_shot_nums)
     generated_paths: list[Path] = []
     update_task_log_status(project_dir, args.episode_num, title, f"分镜头创作中 / 场景{args.scene_num}")
-    for shot_num in target_shot_nums:
-        prompt_path = shot_prompt_output_path_for_episode(project_dir, args.episode_num, args.scene_num, shot_num)
-        prompt_path.write_text(
-            build_shot_prompt_pack(
-                project_dir,
-                args.episode_num,
-                args.scene_num,
-                shot_num,
-                title,
-                core_event,
-                scene_path,
-            ),
-            encoding="utf-8",
-        )
-        generated_paths.append(prompt_path)
+    prompt_path = shot_prompt_output_path_for_episode(project_dir, args.episode_num, args.scene_num, selected_shot_num)
+    prompt_path.write_text(
+        build_shot_prompt_pack(
+            project_dir,
+            args.episode_num,
+            args.scene_num,
+            selected_shot_num,
+            title,
+            core_event,
+            scene_path,
+        ),
+        encoding="utf-8",
+    )
+    generated_paths.append(prompt_path)
 
     for path in generated_paths:
         print(path)

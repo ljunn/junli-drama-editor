@@ -47,6 +47,8 @@ python3 scripts/episode_pipeline.py review <剧本文件路径>
 python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件路径> --summary "本集摘要"
 ```
 
+不传 `--scene-num` 或 `--shot-num` 时，命令也只会生成“下一个缺失项”各 1 个 prompt，不会批量生成。
+
 ## 目录结构
 
 ```text
