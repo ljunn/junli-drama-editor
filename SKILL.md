@@ -148,12 +148,25 @@ python3 scripts/episode_pipeline.py plan <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数>
 ```
 
+`compose` 只生成 Prompt Pack，不直接把正文写进 `episodes/`；最终剧本在 `finish` 时会自动归档成 `episodes/episode-XXXX.md`。
+
+如果当前模型或视频工具一次吃不下整集，改用：
+
+```bash
+python3 scripts/episode_pipeline.py compose-scenes <项目目录> --episode-num <集数>
+python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <集数>
+```
+
+`compose-scenes` 会把整集拆成多个单场 Prompt Pack，每场同时要求补出约 5 秒一段的镜头单元表，适合低输出长度模型和 5 秒视频生成工具。
+
 4. 如果要交付完整剧本，必须满足：
    - 交付的是剧本格式，不是小说段落
    - 默认 4-5 个场景
    - 独立地点切换默认不超过 3 次
    - 3 秒内进入冲突
    - 每集至少 3 个爽点
+   - 每场至少完成“目标 -> 阻碍 -> 变化”三步，不得整场只解释信息
+   - 如果下游视频工具只能生成 5 秒左右镜头，必须能继续拆成 5 秒单元，不要把剧情绑死在单个长场景里
    - 首场景写主角完整外貌，后续只写服装变化
 
 5. 写完后必须先跑：
@@ -163,7 +176,7 @@ python3 scripts/episode_pipeline.py check <剧本文件路径>
 python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件路径> --summary "本集摘要"
 ```
 
-6. `finish` 会更新 `task_log.md`、`state/剧集历史.md`，并在 `state/角色状态.md`、`state/伏笔列表.md` 写入“待确认回写”提醒；明确的知情状态和伏笔推进仍要人工细化。
+6. `finish` 会把最终剧本自动归档到 `episodes/episode-XXXX.md`，再更新 `task_log.md`、`state/剧集历史.md`，并在 `state/角色状态.md`、`state/伏笔列表.md` 写入“待确认回写”提醒；明确的知情状态和伏笔推进仍要人工细化。
 7. 如果 `preflight` 失败，必须先补文件或替换模板占位；禁止假装已经恢复上下文。
 8. 如果用户只要求改某一集的节奏、对白、卡点或格式，默认做定向返修，不整集推倒重写。
 9. 如果用户要求的是“拍摄版”而不是“AI 视频生成版”，优先遵守拍摄版场景经济性；如果用户要求的是“AI 视频生成版”，优先遵守结构化场景块和 3000 字符控制。
@@ -330,6 +343,8 @@ python3 scripts/episode_pipeline.py preflight <项目目录>
 python3 scripts/episode_pipeline.py resume <项目目录>
 python3 scripts/episode_pipeline.py plan <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数>
+python3 scripts/episode_pipeline.py compose-scenes <项目目录> --episode-num <集数>
+python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py next-episode <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py check <剧本文件路径>
 python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件路径> --summary "本集摘要"

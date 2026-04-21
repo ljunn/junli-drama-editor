@@ -105,7 +105,46 @@ python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数
 
 它会把 5 个配置文件、`task_log.md`、最近 2-3 集摘要、上一集结束状态、活跃伏笔、当前场景卡、分集梗概补充和上一集剧本尾段编译成一份可直接喂给 AI 的 Prompt Pack。
 
-### 4. 单集结构化质检
+注意：
+
+- `compose` 只生成 Prompt Pack，不会替你自动落正文文件
+- Prompt Pack 会强制要求每场至少有“目标 -> 阻碍 -> 变化”的推进，不允许整场只解释线索
+- 如果 AI 生成完正文，交给 `finish` 时会自动归档成 `episodes/episode-XXXX.md`
+
+如果你用的是输出长度偏紧的模型，或者下游视频工具只能吃 5 秒左右的镜头，不要硬让它一次写完整集，改用下面的分场工作流。
+
+### 4. 分场创作包
+
+默认入口：
+
+```bash
+python3 scripts/episode_pipeline.py compose-scenes <项目目录> --episode-num <集数>
+```
+
+它会按当前 `场景节奏卡` 生成多个 Prompt Pack：
+
+- `runtime/episode-XXXX.scene-01.prompt.md`
+- `runtime/episode-XXXX.scene-02.prompt.md`
+- ...
+
+每个 Prompt Pack 只要求模型处理一个场景，并额外拆出约 5 秒一段的镜头单元表，方便继续喂给短视频生成工具。
+
+分场结果建议保存为：
+
+- `runtime/episode-XXXX.scene-01.md`
+- `runtime/episode-XXXX.scene-02.md`
+
+写完后可用：
+
+```bash
+python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <集数>
+```
+
+把所有分场正文拼成：
+
+- `runtime/episode-XXXX.assembled.md`
+
+### 5. 单集结构化质检
 
 默认入口：
 
@@ -120,10 +159,11 @@ python3 scripts/episode_pipeline.py review <剧本文件路径>
 - 空行 / 分隔符检查
 - 小说化风险词检查
 - 对话格式检查
+- 正文过短 / 对白稀少预警
 
 它主要是结构门。爽点、卡点、人物一致性和知情状态，仍要结合 `references/quality-checklist.md` 做人工复核。
 
-### 5. 状态回写
+### 6. 状态回写
 
 默认入口：
 
@@ -133,6 +173,7 @@ python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件
 
 它会更新：
 
+- `episodes/episode-XXXX.md` 归档剧本
 - `task_log.md`
 - `state/剧集历史.md`
 - `state/角色状态.md` 的“待确认回写”提醒
@@ -162,6 +203,8 @@ python3 scripts/episode_pipeline.py workflows
 - `resume`
 - `plan`
 - `compose`
+- `compose-scenes`
+- `stitch-scenes`
 - `check`
 - `review`
 - `finish`
@@ -201,6 +244,9 @@ python3 scripts/episode_pipeline.py commands
 - 不知道从哪里进：先跑 `python3 scripts/episode_pipeline.py workflows`
 - 要继续写下一集：优先用 `next-episode`
 - 要生成给 AI 的单集 Prompt：优先用 `compose`
+- 模型一次写不完整集，或下游工具只能生成 5 秒左右镜头：改用 `compose-scenes`
+- 要把多个分场结果拼回整集：用 `stitch-scenes`
+- 要把 AI 生成好的最终剧本归档到项目里：用 `finish`
 - 要检查剧本格式和字数：优先用 `review`，再配合 `references/quality-checklist.md` 做人工复核
 - 要做投稿资料：先对照 `references/submission-checklist.md`，再读 `references/submission-package.md`
 - 要判断写法是不是跑偏：读 `references/good-vs-bad-examples.md`
