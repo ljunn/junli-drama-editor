@@ -81,11 +81,12 @@
 
 如果当前模型一次写不完整集，或者下游视频工具只能处理约 5 秒镜头：
 
-- 不要硬写整集，改走分场
+- 不要硬写整集，改走单集目录化流程
 - 先用 `compose-scenes` 生成单场 Prompt Pack
-- 每场结果另存为 `runtime/episode-XXXX.scene-YY.md`
-- 再用 `stitch-scenes` 拼回整集
-- 单场内部继续拆成约 5 秒一段的镜头单元，保证后续视频生成不断档
+- 每场结果另存为 `runtime/episode-XXXX/scene-YY/scene.md`
+- 再用 `compose-shots` 从 `scene.md` 里按镜头拆出 `shot-001.prompt.md`
+- 每次只生成一个镜头，结果另存为 `runtime/episode-XXXX/scene-YY/shot-001.md`
+- 最后再用 `stitch-scenes` 拼回整集
 
 ## 阶段 4：质量检查
 

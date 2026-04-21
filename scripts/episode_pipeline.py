@@ -77,8 +77,8 @@ WORKFLOW_LAYER_CATALOG: list[dict[str, Any]] = [
     {
         "id": "compose-scenes",
         "title": "分场创作包",
-        "steps": ["compose-scenes", "stitch-scenes"],
-        "summary": "把整集拆成多个场景 Prompt Pack，适合低输出长度模型和 5 秒视频镜头工作流。",
+        "steps": ["compose-scenes", "compose-shots", "stitch-scenes"],
+        "summary": "把整集拆成单集目录、单场 Prompt Pack 和单镜头 Prompt Pack，适合 5 秒视频镜头工作流。",
     },
     {
         "id": "finish",
@@ -92,11 +92,22 @@ COMMAND_LAYER_CATALOG: list[dict[str, Any]] = [
     {"group": "Layer", "commands": ["rules", "workflows", "commands"]},
     {
         "group": "Workflow",
-        "commands": ["init-project", "next-episode", "compose-scenes", "review", "finish"],
+        "commands": ["init-project", "next-episode", "compose-scenes", "compose-shots", "review", "finish"],
     },
     {
         "group": "Primitive",
-        "commands": ["init", "preflight", "resume", "plan", "compose", "compose-scenes", "stitch-scenes", "check", "finish"],
+        "commands": [
+            "init",
+            "preflight",
+            "resume",
+            "plan",
+            "compose",
+            "compose-scenes",
+            "compose-shots",
+            "stitch-scenes",
+            "check",
+            "finish",
+        ],
     },
 ]
 
@@ -375,20 +386,154 @@ def find_history_row(history_rows: list[dict[str, str]], episode_num: int) -> di
     return None
 
 
-def plan_path_for_episode(project_dir: Path, episode_num: int) -> Path:
+def episode_runtime_dir(project_dir: Path, episode_num: int) -> Path:
+    return project_dir / "runtime" / f"episode-{episode_num:04d}"
+
+
+def episode_runtime_output_dir(project_dir: Path, episode_num: int) -> Path:
+    runtime_dir = episode_runtime_dir(project_dir, episode_num)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    return runtime_dir
+
+
+def legacy_plan_path_for_episode(project_dir: Path, episode_num: int) -> Path:
     return project_dir / "runtime" / f"episode-{episode_num:04d}.plan.md"
 
 
-def prompt_path_for_episode(project_dir: Path, episode_num: int) -> Path:
+def legacy_prompt_path_for_episode(project_dir: Path, episode_num: int) -> Path:
     return project_dir / "runtime" / f"episode-{episode_num:04d}.prompt.md"
 
 
-def scene_prompt_path_for_episode(project_dir: Path, episode_num: int, scene_num: int) -> Path:
+def legacy_scene_prompt_path_for_episode(project_dir: Path, episode_num: int, scene_num: int) -> Path:
     return project_dir / "runtime" / f"episode-{episode_num:04d}.scene-{scene_num:02d}.prompt.md"
 
 
-def stitched_scene_path_for_episode(project_dir: Path, episode_num: int) -> Path:
+def legacy_scene_output_path_for_episode(project_dir: Path, episode_num: int, scene_num: int, extension: str = ".md") -> Path:
+    return project_dir / "runtime" / f"episode-{episode_num:04d}.scene-{scene_num:02d}{extension}"
+
+
+def legacy_stitched_scene_path_for_episode(project_dir: Path, episode_num: int) -> Path:
     return project_dir / "runtime" / f"episode-{episode_num:04d}.assembled.md"
+
+
+def scene_runtime_dir(project_dir: Path, episode_num: int, scene_num: int) -> Path:
+    return episode_runtime_dir(project_dir, episode_num) / f"scene-{scene_num:02d}"
+
+
+def scene_runtime_output_dir(project_dir: Path, episode_num: int, scene_num: int) -> Path:
+    runtime_dir = scene_runtime_dir(project_dir, episode_num, scene_num)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    return runtime_dir
+
+
+def plan_output_path_for_episode(project_dir: Path, episode_num: int) -> Path:
+    return episode_runtime_output_dir(project_dir, episode_num) / "plan.md"
+
+
+def plan_path_for_episode(project_dir: Path, episode_num: int) -> Path:
+    preferred_path = episode_runtime_dir(project_dir, episode_num) / "plan.md"
+    legacy_path = legacy_plan_path_for_episode(project_dir, episode_num)
+    return preferred_path if preferred_path.exists() or not legacy_path.exists() else legacy_path
+
+
+def prompt_output_path_for_episode(project_dir: Path, episode_num: int) -> Path:
+    return episode_runtime_output_dir(project_dir, episode_num) / "prompt.md"
+
+
+def prompt_path_for_episode(project_dir: Path, episode_num: int) -> Path:
+    preferred_path = episode_runtime_dir(project_dir, episode_num) / "prompt.md"
+    legacy_path = legacy_prompt_path_for_episode(project_dir, episode_num)
+    return preferred_path if preferred_path.exists() or not legacy_path.exists() else legacy_path
+
+
+def scene_prompt_output_path_for_episode(project_dir: Path, episode_num: int, scene_num: int) -> Path:
+    return scene_runtime_output_dir(project_dir, episode_num, scene_num) / "scene.prompt.md"
+
+
+def scene_prompt_path_for_episode(project_dir: Path, episode_num: int, scene_num: int) -> Path:
+    preferred_path = scene_runtime_dir(project_dir, episode_num, scene_num) / "scene.prompt.md"
+    legacy_path = legacy_scene_prompt_path_for_episode(project_dir, episode_num, scene_num)
+    return preferred_path if preferred_path.exists() or not legacy_path.exists() else legacy_path
+
+
+def scene_output_path_for_episode(project_dir: Path, episode_num: int, scene_num: int, extension: str = ".md") -> Path:
+    return scene_runtime_output_dir(project_dir, episode_num, scene_num) / f"scene{extension}"
+
+
+def shot_prompt_output_path_for_episode(project_dir: Path, episode_num: int, scene_num: int, shot_num: int) -> Path:
+    return scene_runtime_output_dir(project_dir, episode_num, scene_num) / f"shot-{shot_num:03d}.prompt.md"
+
+
+def shot_output_path_for_episode(project_dir: Path, episode_num: int, scene_num: int, shot_num: int, extension: str = ".md") -> Path:
+    return scene_runtime_output_dir(project_dir, episode_num, scene_num) / f"shot-{shot_num:03d}{extension}"
+
+
+def scene_output_candidates(project_dir: Path, episode_num: int, scene_num: int) -> list[Path]:
+    candidates = [
+        scene_output_path_for_episode(project_dir, episode_num, scene_num, ".md"),
+        scene_output_path_for_episode(project_dir, episode_num, scene_num, ".txt"),
+        legacy_scene_output_path_for_episode(project_dir, episode_num, scene_num, ".md"),
+        legacy_scene_output_path_for_episode(project_dir, episode_num, scene_num, ".txt"),
+    ]
+    scene_dir = scene_runtime_dir(project_dir, episode_num, scene_num)
+    if scene_dir.exists():
+        for path in episode_script_candidates(scene_dir):
+            if path.name.endswith(".prompt.md") or path.name.startswith("shot-"):
+                continue
+            if path not in candidates:
+                candidates.append(path)
+    return candidates
+
+
+def find_scene_output_file(project_dir: Path, episode_num: int, scene_num: int) -> Path | None:
+    for path in scene_output_candidates(project_dir, episode_num, scene_num):
+        if path.exists():
+            return path
+    return None
+
+
+def shot_output_candidates(project_dir: Path, episode_num: int, scene_num: int, shot_num: int) -> list[Path]:
+    candidates = [
+        shot_output_path_for_episode(project_dir, episode_num, scene_num, shot_num, ".md"),
+        shot_output_path_for_episode(project_dir, episode_num, scene_num, shot_num, ".txt"),
+    ]
+    scene_dir = scene_runtime_dir(project_dir, episode_num, scene_num)
+    if scene_dir.exists():
+        for path in episode_script_candidates(scene_dir):
+            if path.name.endswith(".prompt.md"):
+                continue
+            match = re.match(rf"^shot-{shot_num:03d}(?:\.[^.]+)?\.(md|txt)$", path.name)
+            if match and path not in candidates:
+                candidates.append(path)
+    return candidates
+
+
+def find_shot_output_files(project_dir: Path, episode_num: int, scene_num: int) -> list[tuple[int, Path]]:
+    scene_dir = scene_runtime_dir(project_dir, episode_num, scene_num)
+    if not scene_dir.exists():
+        return []
+
+    shot_files: dict[int, Path] = {}
+    for path in episode_script_candidates(scene_dir):
+        if path.name.endswith(".prompt.md"):
+            continue
+        match = re.match(r"^shot-(\d+)(?:\.[^.]+)?\.(md|txt)$", path.name)
+        if not match:
+            continue
+        shot_num = int(match.group(1))
+        if shot_num not in shot_files:
+            shot_files[shot_num] = path
+    return sorted(shot_files.items(), key=lambda item: item[0])
+
+
+def stitched_scene_path_for_episode(project_dir: Path, episode_num: int) -> Path:
+    preferred_path = episode_runtime_dir(project_dir, episode_num) / "assembled.md"
+    legacy_path = legacy_stitched_scene_path_for_episode(project_dir, episode_num)
+    return preferred_path if preferred_path.exists() or not legacy_path.exists() else legacy_path
+
+
+def stitched_scene_output_path_for_episode(project_dir: Path, episode_num: int) -> Path:
+    return episode_runtime_output_dir(project_dir, episode_num) / "assembled.md"
 
 
 def canonical_episode_script_path(project_dir: Path, episode_num: int) -> Path:
@@ -403,7 +548,11 @@ def episode_script_candidates(base_dir: Path) -> list[Path]:
 
 
 def episode_file_matches(path: Path, episode_num: int) -> bool:
-    name = path.stem
+    candidates = (
+        path.stem,
+        path.name,
+        "/".join(path.parts[-3:]),
+    )
     patterns = (
         rf"第\s*{episode_num}\s*集",
         rf"(?:^|[^0-9]){episode_num:04d}(?:[^0-9]|$)",
@@ -411,7 +560,7 @@ def episode_file_matches(path: Path, episode_num: int) -> bool:
         rf"(?:^|[^0-9]){episode_num:02d}(?:[^0-9]|$)",
         rf"(?:^|[^0-9]){episode_num}(?:[^0-9]|$)",
     )
-    return any(re.search(pattern, name) for pattern in patterns)
+    return any(re.search(pattern, candidate) for candidate in candidates for pattern in patterns)
 
 
 def find_episode_script(project_dir: Path, episode_num: int) -> Path | None:
@@ -422,6 +571,12 @@ def find_episode_script(project_dir: Path, episode_num: int) -> Path | None:
             continue
         for path in episode_script_candidates(base_dir):
             if path.name.endswith(".plan.md") or path.name.endswith(".prompt.md"):
+                continue
+            if path.name in {"plan.md", "prompt.md"}:
+                continue
+            if any(part.startswith("scene-") for part in path.parts):
+                continue
+            if path.name.startswith("shot-"):
                 continue
             if episode_file_matches(path, episode_num):
                 candidates.append(path)
@@ -481,17 +636,95 @@ def find_scene_output_files(project_dir: Path, episode_num: int) -> list[tuple[i
         return []
 
     scene_files: dict[int, Path] = {}
-    pattern = re.compile(rf"^episode-{episode_num:04d}\.scene-(\d+)(?:\.[^.]+)?\.(md|txt)$")
+    episode_dir = episode_runtime_dir(project_dir, episode_num)
+    if episode_dir.exists():
+        for scene_dir in sorted(episode_dir.glob("scene-*")):
+            if not scene_dir.is_dir():
+                continue
+            match = re.match(r"^scene-(\d+)$", scene_dir.name)
+            if not match:
+                continue
+            scene_num = int(match.group(1))
+            scene_path = find_scene_output_file(project_dir, episode_num, scene_num)
+            if scene_path and scene_num not in scene_files:
+                scene_files[scene_num] = scene_path
+
+    legacy_pattern = re.compile(rf"^episode-{episode_num:04d}\.scene-(\d+)(?:\.[^.]+)?\.(md|txt)$")
     for path in episode_script_candidates(runtime_dir):
         if path.name.endswith(".prompt.md"):
             continue
-        match = pattern.match(path.name)
+        match = legacy_pattern.match(path.name)
         if not match:
             continue
         scene_num = int(match.group(1))
         if scene_num not in scene_files:
             scene_files[scene_num] = path
     return sorted(scene_files.items(), key=lambda item: item[0])
+
+
+def parse_markdown_table_rows(text: str, header_patterns: tuple[str, ...]) -> list[tuple[str, ...]]:
+    rows: list[tuple[str, ...]] = []
+    table_started = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not table_started and any(stripped.startswith(pattern) for pattern in header_patterns):
+            table_started = True
+            continue
+        if not table_started:
+            continue
+        if stripped.startswith("|---") or stripped.startswith("|------"):
+            continue
+        if not stripped.startswith("|"):
+            if rows:
+                break
+            continue
+        cells = tuple(cell.strip() for cell in stripped.strip("|").split("|"))
+        if cells:
+            rows.append(cells)
+    return rows
+
+
+def extract_shot_table_section(text: str) -> str:
+    match = re.search(r"(?ms)^## (?:5秒镜头单元表|镜头拆分表)\n(.*?)(?=^## |\Z)", text)
+    return match.group(1).strip() if match else ""
+
+
+def extract_scene_body_without_shot_table(text: str) -> str:
+    return re.sub(r"(?ms)\n## (?:5秒镜头单元表|镜头拆分表)\n.*$", "", text).strip()
+
+
+def parse_shot_index(value: str) -> int | None:
+    match = re.search(r"(\d+)", value)
+    return int(match.group(1)) if match else None
+
+
+def parse_shot_plan_rows(scene_text: str) -> list[dict[str, str]]:
+    section = extract_shot_table_section(scene_text)
+    if not section:
+        return []
+
+    rows = parse_markdown_table_rows(
+        section,
+        header_patterns=("| 镜头 |", "| 分镜 |", "| Shot |"),
+    )
+    parsed_rows: list[dict[str, str]] = []
+    for cells in rows:
+        if len(cells) < 6:
+            continue
+        shot_num = parse_shot_index(cells[0])
+        if shot_num is None:
+            continue
+        parsed_rows.append(
+            {
+                "shot": str(shot_num),
+                "seconds": cells[1],
+                "goal": cells[2],
+                "action": cells[3],
+                "dialogue": cells[4],
+                "bridge": cells[5],
+            }
+        )
+    return parsed_rows
 
 
 def tail_excerpt(text: str, max_chars: int = 1800) -> str:
@@ -792,7 +1025,7 @@ def resolve_episode_meta(project_dir: Path, episode_num: int, title: str | None,
 def command_plan(args: argparse.Namespace) -> int:
     project_dir = ensure_project_dir(Path(args.project_dir))
     title, core_event = resolve_episode_meta(project_dir, args.episode_num, args.title, args.core_event)
-    runtime_path = plan_path_for_episode(project_dir, args.episode_num)
+    runtime_path = plan_output_path_for_episode(project_dir, args.episode_num)
     runtime_path.write_text(
         build_plan_text(
             args.episode_num,
@@ -1050,6 +1283,7 @@ def build_scene_prompt_pack(
             "- 本场至少出现 2 次有效推进：试探、反压、拿证据、交易、拆穿、逃脱、反打、暴露风险等任选其二。",
             "- 本场对白要短狠有信息量，默认至少 3 句有效对白。",
             f"- 本场结尾：{bridge_hint}",
+            "- 每个镜头单元默认 5 秒上下，禁止把两个以上关键动作糊成同一个长镜头。",
             "- 宁可缩短 `(光影)/(镜头)/(画质)` 修饰词，也不要把动作、反转和对白压没。",
             "",
             "## 输出格式",
@@ -1058,13 +1292,176 @@ def build_scene_prompt_pack(
             "3. 剧本块后追加 `## 5秒镜头单元表`。",
             f"4. `## 5秒镜头单元表` 必须拆成约 {video_unit_count} 行，每行约 {shot_seconds} 秒。",
             "5. 单元表列建议：镜头 | 秒数 | 画面目标 | 人物/动作 | 台词/口型 | 承上启下。",
-            "6. 每个镜头单元都要能直接喂给 5 秒视频工具，不要写成抽象总结。",
-            "7. 不要输出其他场景，不要输出解释说明。",
+            "6. 每个镜头单元都要能直接喂给 5 秒视频工具，不要写成抽象总结；每行都要写清具体起点动作、画面结果和口型内容。",
+            f"7. 生成结果默认保存到 `runtime/episode-{episode_num:04d}/scene-{scene_num:02d}/scene.md`。",
+            "8. 不要输出其他场景，不要输出解释说明。",
             "",
             "## 生成前自检",
             "- 当前场是否真的发生了升级，而不是停在“发现线索”？",
             "- 当前场的爽点/压制/反打是否能在画面里直接看出来？",
             "- 镜头单元表是否能覆盖当前场的完整剧情，不会出现中间断档？",
+        ]
+    )
+    return "\n".join(prompt_lines).rstrip() + "\n"
+
+
+def build_shot_plan_excerpt(shot_rows: list[dict[str, str]], shot_num: int) -> list[str]:
+    selected_rows = [
+        row for row in shot_rows if abs(int(row["shot"]) - shot_num) <= 1
+    ]
+    lines = [
+        "| 镜头 | 秒数 | 画面目标 | 人物/动作 | 台词/口型 | 承上启下 |",
+        "|------|------|----------|-----------|-----------|----------|",
+    ]
+    for row in selected_rows:
+        marker = " <- 当前镜头" if int(row["shot"]) == shot_num else ""
+        lines.append(
+            f"| {row['shot']} | {row['seconds']} | {row['goal']} | {row['action']} | {row['dialogue']} | {row['bridge']}{marker} |"
+        )
+    return lines
+
+
+def build_shot_prompt_pack(
+    project_dir: Path,
+    episode_num: int,
+    scene_num: int,
+    shot_num: int,
+    title: str,
+    core_event: str,
+    scene_path: Path,
+) -> str:
+    sections = []
+    for filename in REQUIRED_CORE_FILES:
+        path = project_dir / filename
+        sections.append(f"[{filename}]\n{read_text(path).strip()}")
+
+    task_log = read_text(project_dir / "task_log.md").strip()
+    role_state = read_text(project_dir / "state" / "角色状态.md").strip()
+    hook_state = read_text(project_dir / "state" / "伏笔列表.md").strip()
+    history_rows = parse_history_rows(read_text(project_dir / "state" / "剧集历史.md"))
+    recent_rows = recent_completed_rows(history_rows, before_episode=episode_num, limit=3)
+    recent_summary_lines = (
+        [f"- 第{row['episode']}集《{row['title']}》：{row['summary']}" for row in recent_rows]
+        if recent_rows
+        else ["- 暂无已完成剧集摘要"]
+    )
+
+    plan_text = read_text(plan_path_for_episode(project_dir, episode_num)).strip()
+    scene_rows = parse_scene_plan_rows(plan_text)
+    current_scene_row = next((row for row in scene_rows if int(row["scene"]) == scene_num), None)
+    if not current_scene_row:
+        raise ValueError(f"未在场景卡中找到场景{scene_num}")
+
+    scene_text = read_text(scene_path).strip()
+    shot_rows = parse_shot_plan_rows(scene_text)
+    current_shot_row = next((row for row in shot_rows if int(row["shot"]) == shot_num), None)
+    if not current_shot_row:
+        raise ValueError(f"未在 `{scene_path.name}` 中找到镜头{shot_num} 的拆分表行")
+
+    scene_body = extract_scene_body_without_shot_table(scene_text)
+    try:
+        scene_display_path = scene_path.relative_to(project_dir)
+    except ValueError:
+        scene_display_path = scene_path
+    previous_scene_path = find_scene_output_file(project_dir, episode_num, scene_num - 1) if scene_num > 1 else None
+    previous_scene_excerpt = tail_excerpt(read_text(previous_scene_path), max_chars=1000) if previous_scene_path else ""
+    previous_shot_outputs = {current_num: path for current_num, path in find_shot_output_files(project_dir, episode_num, scene_num)}
+    previous_shot_path = previous_shot_outputs.get(shot_num - 1)
+    previous_shot_excerpt = tail_excerpt(read_text(previous_shot_path), max_chars=900) if previous_shot_path else ""
+
+    scene_header = ""
+    for line in scene_body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("场景"):
+            scene_header = stripped
+            break
+    bridge_hint = (
+        "镜头结尾必须稳住本场强卡点，不要再额外发散。"
+        if shot_num == len(shot_rows)
+        else f"镜头结尾必须把压力明确交给镜头{shot_num + 1}。"
+    )
+
+    prompt_lines = [
+        "你正在为平台向微短剧生成单镜头内容。当前工具一次只处理一个镜头，禁止把多个镜头糊成一个长段。",
+        "",
+        "## 核心配置",
+        *sections,
+        "",
+        "## 当前任务",
+        f"- 当前只写：第{episode_num}集《{title}》 / 场景{scene_num} / 镜头{shot_num}",
+        f"- 本集核心事件：{core_event or '待补充'}",
+        f"- 当前场目标秒数：{current_scene_row['target_seconds']}",
+        f"- 当前场入场局势：{current_scene_row['entry_state']}",
+        f"- 当前镜头秒数：{current_shot_row['seconds']}",
+        f"- 当前镜头画面目标：{current_shot_row['goal']}",
+        f"- 当前镜头人物/动作：{current_shot_row['action']}",
+        f"- 当前镜头台词/口型：{current_shot_row['dialogue']}",
+        f"- 当前镜头承接：{current_shot_row['bridge']}",
+        "",
+        "## 恢复摘要",
+        "[task_log.md]",
+        task_log,
+        "",
+        "最近 2-3 集摘要：",
+        *recent_summary_lines,
+        "",
+        "[state/角色状态.md]",
+        role_state,
+        "",
+        "[state/伏笔列表.md]",
+        hook_state,
+        "",
+        "## 当前场景卡",
+        *build_scene_plan_excerpt(scene_rows, scene_num),
+        "",
+        "## 邻近镜头拆分表",
+        *build_shot_plan_excerpt(shot_rows, shot_num),
+        "",
+        f"[当前场原稿: {scene_display_path}]",
+        scene_body or "当前场原稿为空，请先补齐场景文件。",
+    ]
+
+    if previous_scene_excerpt:
+        prompt_lines.extend(
+            [
+                "",
+                f"[上一场尾段: {previous_scene_path.relative_to(project_dir)}]",
+                previous_scene_excerpt,
+            ]
+        )
+
+    if previous_shot_excerpt:
+        prompt_lines.extend(
+            [
+                "",
+                f"[上一镜头结果: {previous_shot_path.relative_to(project_dir)}]",
+                previous_shot_excerpt,
+            ]
+        )
+
+    prompt_lines.extend(
+        [
+            "",
+            "## 单镜头要求",
+            "- 只覆盖当前这一镜头，不要偷写下一个镜头的动作结果。",
+            "- 镜头内部至少写清起点动作、关键变化和收束结果，不能只写一个静态姿势。",
+            "- 细化人物表情、道具交互、机位、运动方式和口型，但不要重新扩成整场或整集。",
+            "- 如果当前镜头没有台词，也要明确口型为空、动作承担推进。",
+            f"- {bridge_hint}",
+            "- 宁可把一个动作拆细，也不要把两个节拍压进同一句抽象总结。",
+            "",
+            "## 输出格式",
+            f"1. 只输出 `镜头{shot_num}:` 这一镜头。",
+            f"2. 标题建议：`镜头{shot_num}: {scene_header or f'场景{scene_num}'}({current_shot_row['seconds']})`。",
+            "3. 正文结构：`(主体)` / `(环境)` / `(动作)` / `(光影)` / `(镜头)` / `(画质)` / `台词:`。",
+            "4. 台词只保留当前镜头真正会说出的句子，不要偷带后续镜头内容。",
+            f"5. 生成结果默认保存到 `runtime/episode-{episode_num:04d}/scene-{scene_num:02d}/shot-{shot_num:03d}.md`。",
+            "6. 不要输出解释，不要输出其他镜头。",
+            "",
+            "## 生成前自检",
+            "- 这个镜头单独拿出来，观众能看懂它的动作目标和结果吗？",
+            "- 这个镜头有没有偷偷吃掉下一个镜头的剧情？",
+            "- 这个镜头的台词、表情、机位是否都服务于当前 5 秒，而不是泛泛补描写？",
         ]
     )
     return "\n".join(prompt_lines).rstrip() + "\n"
@@ -1083,7 +1480,7 @@ def command_compose(args: argparse.Namespace) -> int:
         print("Compose 提醒：")
         for item in warnings:
             print(f"- {item}")
-    prompt_path = prompt_path_for_episode(project_dir, args.episode_num)
+    prompt_path = prompt_output_path_for_episode(project_dir, args.episode_num)
     update_task_log_status(project_dir, args.episode_num, title, "单集创作中")
     prompt_path.write_text(
         build_prompt_pack(project_dir, args.episode_num, title, core_event, args.target_duration),
@@ -1122,7 +1519,7 @@ def command_compose_scenes(args: argparse.Namespace) -> int:
     generated_paths: list[Path] = []
     update_task_log_status(project_dir, args.episode_num, title, "分场创作中")
     for scene_num in target_scene_nums:
-        prompt_path = scene_prompt_path_for_episode(project_dir, args.episode_num, scene_num)
+        prompt_path = scene_prompt_output_path_for_episode(project_dir, args.episode_num, scene_num)
         prompt_path.write_text(
             build_scene_prompt_pack(
                 project_dir,
@@ -1142,12 +1539,67 @@ def command_compose_scenes(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_compose_shots(args: argparse.Namespace) -> int:
+    project_dir = ensure_project_dir(Path(args.project_dir))
+    title, core_event = resolve_episode_meta(project_dir, args.episode_num, args.title, args.core_event)
+    blockers, warnings = collect_episode_context_issues(project_dir, args.episode_num, title, core_event)
+    if blockers:
+        print("Compose-shots 失败：")
+        for item in blockers:
+            print(f"- {item}")
+        return 1
+    if warnings:
+        print("Compose-shots 提醒：")
+        for item in warnings:
+            print(f"- {item}")
+
+    scene_path = Path(args.scene_file).resolve() if args.scene_file else find_scene_output_file(project_dir, args.episode_num, args.scene_num)
+    if not scene_path or not scene_path.exists():
+        expected_path = scene_output_path_for_episode(project_dir, args.episode_num, args.scene_num)
+        print("Compose-shots 失败：未找到当前场的正文文件。")
+        print(f"请先生成并保存场景结果，例如：{expected_path}")
+        return 1
+
+    shot_rows = parse_shot_plan_rows(read_text(scene_path))
+    if not shot_rows:
+        print("Compose-shots 失败：当前场正文里没有可解析的 `## 5秒镜头单元表` 或 `## 镜头拆分表`。")
+        return 1
+
+    available_shot_nums = [int(row["shot"]) for row in shot_rows]
+    if args.shot_num is not None and args.shot_num not in available_shot_nums:
+        print(f"Compose-shots 失败：镜头{args.shot_num} 不在当前场的镜头拆分表里。")
+        return 1
+
+    target_shot_nums = [args.shot_num] if args.shot_num else available_shot_nums
+    generated_paths: list[Path] = []
+    update_task_log_status(project_dir, args.episode_num, title, f"分镜头创作中 / 场景{args.scene_num}")
+    for shot_num in target_shot_nums:
+        prompt_path = shot_prompt_output_path_for_episode(project_dir, args.episode_num, args.scene_num, shot_num)
+        prompt_path.write_text(
+            build_shot_prompt_pack(
+                project_dir,
+                args.episode_num,
+                args.scene_num,
+                shot_num,
+                title,
+                core_event,
+                scene_path,
+            ),
+            encoding="utf-8",
+        )
+        generated_paths.append(prompt_path)
+
+    for path in generated_paths:
+        print(path)
+    return 0
+
+
 def command_stitch_scenes(args: argparse.Namespace) -> int:
     project_dir = ensure_project_dir(Path(args.project_dir))
     scene_files = find_scene_output_files(project_dir, args.episode_num)
     if not scene_files:
         print("Stitch-scenes 失败：未找到任何分场正文文件。")
-        print("请把每场结果保存成 `runtime/episode-XXXX.scene-YY.md` 或 `.txt`。")
+        print("请把每场结果保存成 `runtime/episode-XXXX/scene-YY/scene.md`，或兼容旧路径 `runtime/episode-XXXX.scene-YY.md`。")
         return 1
 
     plan_rows = parse_scene_plan_rows(read_text(plan_path_for_episode(project_dir, args.episode_num)))
@@ -1170,7 +1622,7 @@ def command_stitch_scenes(args: argparse.Namespace) -> int:
         print("Stitch-scenes 失败：找到文件，但内容为空。")
         return 1
 
-    output_path = Path(args.output).resolve() if args.output else stitched_scene_path_for_episode(project_dir, args.episode_num)
+    output_path = Path(args.output).resolve() if args.output else stitched_scene_output_path_for_episode(project_dir, args.episode_num)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n\n".join(stitched_parts).rstrip() + "\n", encoding="utf-8")
 
@@ -1478,6 +1930,15 @@ def build_parser() -> argparse.ArgumentParser:
     compose_scenes_parser.add_argument("--scene-num", type=int)
     compose_scenes_parser.add_argument("--shot-seconds", type=int, default=5)
 
+    compose_shots_parser = subparsers.add_parser("compose-shots")
+    compose_shots_parser.add_argument("project_dir")
+    compose_shots_parser.add_argument("--episode-num", type=int, required=True)
+    compose_shots_parser.add_argument("--scene-num", type=int, required=True)
+    compose_shots_parser.add_argument("--shot-num", type=int)
+    compose_shots_parser.add_argument("--scene-file")
+    compose_shots_parser.add_argument("--title")
+    compose_shots_parser.add_argument("--core-event")
+
     stitch_scenes_parser = subparsers.add_parser("stitch-scenes")
     stitch_scenes_parser.add_argument("project_dir")
     stitch_scenes_parser.add_argument("--episode-num", type=int, required=True)
@@ -1537,6 +1998,8 @@ def main() -> int:
         return command_compose(args)
     if args.command == "compose-scenes":
         return command_compose_scenes(args)
+    if args.command == "compose-shots":
+        return command_compose_shots(args)
     if args.command == "stitch-scenes":
         return command_stitch_scenes(args)
     if args.command == "next-episode":

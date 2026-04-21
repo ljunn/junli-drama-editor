@@ -111,28 +111,38 @@ python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数
 - Prompt Pack 会强制要求每场至少有“目标 -> 阻碍 -> 变化”的推进，不允许整场只解释线索
 - 如果 AI 生成完正文，交给 `finish` 时会自动归档成 `episodes/episode-XXXX.md`
 
-如果你用的是输出长度偏紧的模型，或者下游视频工具只能吃 5 秒左右的镜头，不要硬让它一次写完整集，改用下面的分场工作流。
+如果你用的是输出长度偏紧的模型，或者下游视频工具只能吃 5 秒左右的镜头，不要硬让它一次写完整集，改用下面的“单集目录 -> 分场 -> 单镜头”工作流。
 
-### 4. 分场创作包
+### 4. 分场 / 分镜头创作包
 
 默认入口：
 
 ```bash
 python3 scripts/episode_pipeline.py compose-scenes <项目目录> --episode-num <集数>
+python3 scripts/episode_pipeline.py compose-shots <项目目录> --episode-num <集数> --scene-num <场景号> --shot-num <镜头号>
 ```
 
-它会按当前 `场景节奏卡` 生成多个 Prompt Pack：
+它会按当前 `场景节奏卡` 在单集目录下生成多个 Prompt Pack：
 
-- `runtime/episode-XXXX.scene-01.prompt.md`
-- `runtime/episode-XXXX.scene-02.prompt.md`
+- `runtime/episode-XXXX/plan.md`
+- `runtime/episode-XXXX/scene-01/scene.prompt.md`
+- `runtime/episode-XXXX/scene-02/scene.prompt.md`
 - ...
 
-每个 Prompt Pack 只要求模型处理一个场景，并额外拆出约 5 秒一段的镜头单元表，方便继续喂给短视频生成工具。
+`compose-scenes` 先要求模型只处理一个场景，并在场景结果里补出约 5 秒一段的镜头单元表。
 
 分场结果建议保存为：
 
-- `runtime/episode-XXXX.scene-01.md`
-- `runtime/episode-XXXX.scene-02.md`
+- `runtime/episode-XXXX/scene-01/scene.md`
+- `runtime/episode-XXXX/scene-02/scene.md`
+
+然后用 `compose-shots` 从单场结果里继续拆出单镜头 Prompt Pack：
+
+- `runtime/episode-XXXX/scene-01/shot-001.prompt.md`
+- `runtime/episode-XXXX/scene-01/shot-002.prompt.md`
+- `runtime/episode-XXXX/scene-01/shot-001.md`
+
+这条链路的目标是：每次只生成一个镜头，宁可拆细，不要几十秒一块糊过去。
 
 写完后可用：
 
@@ -142,7 +152,7 @@ python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <
 
 把所有分场正文拼成：
 
-- `runtime/episode-XXXX.assembled.md`
+- `runtime/episode-XXXX/assembled.md`
 
 ### 5. 单集结构化质检
 
@@ -204,6 +214,7 @@ python3 scripts/episode_pipeline.py workflows
 - `plan`
 - `compose`
 - `compose-scenes`
+- `compose-shots`
 - `stitch-scenes`
 - `check`
 - `review`
@@ -227,6 +238,15 @@ python3 scripts/episode_pipeline.py commands
 │   └── 分集梗概.md
 ├── episodes/
 ├── runtime/
+│   └── episode-0001/
+│       ├── plan.md
+│       ├── prompt.md
+│       ├── assembled.md
+│       └── scene-01/
+│           ├── scene.prompt.md
+│           ├── scene.md
+│           ├── shot-001.prompt.md
+│           └── shot-001.md
 ├── state/
 │   ├── 角色状态.md
 │   ├── 伏笔列表.md
@@ -244,7 +264,7 @@ python3 scripts/episode_pipeline.py commands
 - 不知道从哪里进：先跑 `python3 scripts/episode_pipeline.py workflows`
 - 要继续写下一集：优先用 `next-episode`
 - 要生成给 AI 的单集 Prompt：优先用 `compose`
-- 模型一次写不完整集，或下游工具只能生成 5 秒左右镜头：改用 `compose-scenes`
+- 模型一次写不完整集，或下游工具只能生成 5 秒左右镜头：先用 `compose-scenes`，再用 `compose-shots`
 - 要把多个分场结果拼回整集：用 `stitch-scenes`
 - 要把 AI 生成好的最终剧本归档到项目里：用 `finish`
 - 要检查剧本格式和字数：优先用 `review`，再配合 `references/quality-checklist.md` 做人工复核

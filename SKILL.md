@@ -154,10 +154,21 @@ python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数
 
 ```bash
 python3 scripts/episode_pipeline.py compose-scenes <项目目录> --episode-num <集数>
+python3 scripts/episode_pipeline.py compose-shots <项目目录> --episode-num <集数> --scene-num <场景号> --shot-num <镜头号>
 python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <集数>
 ```
 
-`compose-scenes` 会把整集拆成多个单场 Prompt Pack，每场同时要求补出约 5 秒一段的镜头单元表，适合低输出长度模型和 5 秒视频生成工具。
+`compose-scenes` 会在 `runtime/episode-XXXX/scene-YY/` 下生成单场 Prompt Pack，并要求当前场补出约 5 秒一段的镜头单元表。
+
+`compose-shots` 会读取 `scene.md` 里的镜头单元表，再把单个镜头拆成独立 Prompt Pack。推荐目录：
+
+- `runtime/episode-XXXX/plan.md`
+- `runtime/episode-XXXX/scene-01/scene.prompt.md`
+- `runtime/episode-XXXX/scene-01/scene.md`
+- `runtime/episode-XXXX/scene-01/shot-001.prompt.md`
+- `runtime/episode-XXXX/scene-01/shot-001.md`
+
+如果下游视频工具一次只能吃 5 秒左右镜头，默认就该走这条目录化流程，每次只生成一个镜头，不要让模型一口气写几十秒。
 
 4. 如果要交付完整剧本，必须满足：
    - 交付的是剧本格式，不是小说段落
@@ -344,6 +355,7 @@ python3 scripts/episode_pipeline.py resume <项目目录>
 python3 scripts/episode_pipeline.py plan <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py compose-scenes <项目目录> --episode-num <集数>
+python3 scripts/episode_pipeline.py compose-shots <项目目录> --episode-num <集数> --scene-num <场景号> --shot-num <镜头号>
 python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py next-episode <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py check <剧本文件路径>
