@@ -797,6 +797,40 @@ def validate_shot_plan_rows(shot_rows: list[dict[str, str]], shot_seconds: int) 
     return issues
 
 
+def validate_scene_brief_text(scene_text: str) -> list[str]:
+    issues: list[str] = []
+    if "## 当前场摘要" not in scene_text:
+        issues.append("缺少 `## 当前场摘要` 小节。")
+
+    brief_text = extract_scene_brief_text(scene_text)
+    brief_lines = [line.strip() for line in brief_text.splitlines() if line.strip()]
+    if len(brief_lines) < 4:
+        issues.append("当前场摘要过短，至少保留 4 行短条目。")
+    if len(brief_lines) > 8:
+        issues.append("当前场摘要过长，说明你又在往长场景正文方向滑。")
+
+    forbidden_patterns = (
+        (r"(?m)^场景\d+:\s*", "摘要里出现了 `场景X:` 长场景标题。"),
+        (r"(?m)^\(主体\)", "摘要里出现了 `(主体)`，说明混入了镜头正文。"),
+        (r"(?m)^\(环境\)", "摘要里出现了 `(环境)`，说明混入了镜头正文。"),
+        (r"(?m)^\(动作\)", "摘要里出现了 `(动作)`，说明混入了镜头正文。"),
+        (r"(?m)^\(光影\)", "摘要里出现了 `(光影)`，说明混入了镜头正文。"),
+        (r"(?m)^\(镜头\)", "摘要里出现了 `(镜头)`，说明混入了镜头正文。"),
+        (r"(?m)^\(画质\)", "摘要里出现了 `(画质)`，说明混入了镜头正文。"),
+        (r"(?m)^台词:\s*$", "摘要里出现了 `台词:`，说明混入了长场景对白。"),
+        (r"(?m)^【环境空镜", "摘要里出现了 `【环境空镜】`，说明混入了长场景正文。"),
+    )
+    for pattern, message in forbidden_patterns:
+        if re.search(pattern, brief_text):
+            issues.append(message)
+
+    dialogue_line_count = len(DIALOGUE_LINE_PATTERN.findall(brief_text))
+    if dialogue_line_count > 0:
+        issues.append("当前场摘要里出现了角色对白行，说明你写成了场景正文。")
+
+    return issues
+
+
 def tail_excerpt(text: str, max_chars: int = 1800) -> str:
     stripped = text.strip()
     if len(stripped) <= max_chars:
@@ -1369,6 +1403,33 @@ def build_scene_prompt_pack(
             "7. 一行里如果出现两个以上并列动作，视为拆分失败，必须继续拆细。",
             f"8. 生成结果默认保存到 `runtime/episode-{episode_num:04d}/scene-{scene_num:02d}/scene.md`。",
             "9. 不要输出完整场景剧本，不要输出 `场景X:` 长正文，不要输出解释说明。",
+            "10. 如果你发现自己开始写 `(主体)/(动作)/台词:` 这种完整场景块，立刻停下，删掉，改回摘要条目。",
+            "",
+            "## 唯一允许骨架",
+            "```md",
+            "## 当前场摘要",
+            "- 地点：",
+            "- 人物：",
+            "- 入场状态：",
+            "- 当前场目标：",
+            "- 当前场冲突：",
+            "- 出场变化：",
+            "",
+            "## 5秒镜头单元表",
+            "| 镜头 | 秒数 | 画面目标 | 人物/动作 | 台词/口型 | 承上启下 |",
+            "|------|------|----------|-----------|-----------|----------|",
+            f"| 1 | 0-{shot_seconds}秒 | ... | ... | ... | ... |",
+            "```",
+            "",
+            "## 错误示例",
+            "下面这种输出是错的，禁止出现：",
+            "```md",
+            "场景1: 食堂(0-40秒)",
+            "【环境空镜3s】...",
+            "(主体)...",
+            "台词:",
+            "角色A:\"...\"",
+            "```",
             "",
             "## 生成前自检",
             "- 当前场是否真的发生了升级，而不是停在“发现线索”？",
@@ -1639,6 +1700,14 @@ def command_compose_shots(args: argparse.Namespace) -> int:
     shot_rows = parse_shot_plan_rows(read_text(scene_path))
     if not shot_rows:
         print("Compose-shots 失败：当前场正文里没有可解析的 `## 5秒镜头单元表` 或 `## 镜头拆分表`。")
+        return 1
+
+    scene_brief_issues = validate_scene_brief_text(read_text(scene_path))
+    if scene_brief_issues:
+        print("Compose-shots 失败：当前场文件不是合格的场景规划稿，仍然混入了长场景正文。")
+        for item in scene_brief_issues:
+            print(f"- {item}")
+        print("请把 `scene.md` 改成“当前场摘要 + 5秒镜头表”后再继续。")
         return 1
 
     shot_plan_issues = validate_shot_plan_rows(shot_rows, args.shot_seconds)
