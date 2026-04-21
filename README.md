@@ -67,7 +67,7 @@ python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件
 
 1. 先读 `PROJECT.md`，确认当前任务属于哪个 Workflow。
 2. 开写新一集前，先做 `preflight` 和 `resume`。
-3. 如果下游工具只能吃 5 秒左右镜头，默认走 `compose-scenes -> compose-shots`，每次只生成一个镜头。
+3. 如果下游工具只能吃 5 秒镜头，默认走 `compose-scenes -> compose-shots`，每次只生成一个镜头；镜头表不是严格 5 秒时，`compose-shots` 会直接报错。
 4. 交付正文前，先做 `review`，再结合 `references/quality-checklist.md` 人工复核。
 5. 写完后执行 `finish`，把历史与状态文件补齐。
 

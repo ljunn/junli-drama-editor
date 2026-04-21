@@ -2,7 +2,7 @@
 
 优先用 `python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数>` 自动生成 Prompt Pack。
 
-如果模型输出长度紧，或下游视频工具只能吃 5 秒左右镜头，改用 `compose-scenes` 先生成单场 Prompt Pack，再用 `compose-shots` 继续拆成单镜头 Prompt Pack，不要硬写整集。
+如果模型输出长度紧，或下游视频工具只能吃 5 秒镜头，改用 `compose-scenes` 先生成单场 Prompt Pack，再用 `compose-shots` 继续拆成单镜头 Prompt Pack，不要硬写整集。
 
 如果手动拼 Prompt，至少保证下面这些上下文都在。
 
@@ -34,7 +34,7 @@
 
 如果要继续拆成单镜头：
 - 先保存单场结果到 `runtime/episode-XXXX/scene-YY/scene.md`
-- 再读取其中的 `## 5秒镜头单元表`
+- 再读取其中的 `## 5秒镜头单元表`，并确保每一行都是 `0-5秒 / 5-10秒 / 10-15秒` 这种连续 5 秒区间
 - 每次只生成一个镜头，保存到 `runtime/episode-XXXX/scene-YY/shot-001.md`
 
 如果有：

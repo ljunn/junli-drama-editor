@@ -727,6 +727,56 @@ def parse_shot_plan_rows(scene_text: str) -> list[dict[str, str]]:
     return parsed_rows
 
 
+def parse_time_span_seconds(value: str) -> tuple[int | None, int | None, int | None]:
+    normalized = value.strip()
+    range_match = re.search(r"(\d+)\s*-\s*(\d+)\s*(?:秒|s|S)?", normalized)
+    if range_match:
+        start_second = int(range_match.group(1))
+        end_second = int(range_match.group(2))
+        return start_second, end_second, max(0, end_second - start_second)
+
+    point_match = re.fullmatch(r"(\d+)\s*(?:秒|s|S)", normalized)
+    if point_match:
+        duration_second = int(point_match.group(1))
+        return 0, duration_second, duration_second
+
+    return None, None, None
+
+
+def validate_shot_plan_rows(shot_rows: list[dict[str, str]], shot_seconds: int) -> list[str]:
+    issues: list[str] = []
+    if not shot_rows:
+        return ["镜头拆分表为空。"]
+
+    expected_shot_num = 1
+    expected_start_second = 0
+    for row in shot_rows:
+        shot_num = int(row["shot"])
+        if shot_num != expected_shot_num:
+            issues.append(f"镜头编号不连续：期望镜头{expected_shot_num}，实际是镜头{shot_num}。")
+            expected_shot_num = shot_num
+
+        start_second, end_second, duration_second = parse_time_span_seconds(row["seconds"])
+        if start_second is None or end_second is None or duration_second is None:
+            issues.append(
+                f"镜头{shot_num} 的秒数格式不合法：`{row['seconds']}`。必须写成 `0-5秒 / 5-10秒` 这种连续区间。"
+            )
+        else:
+            if start_second != expected_start_second:
+                issues.append(
+                    f"镜头{shot_num} 起始秒不连续：期望从 {expected_start_second} 秒开始，实际是 {start_second} 秒。"
+                )
+            if duration_second != shot_seconds:
+                issues.append(
+                    f"镜头{shot_num} 不是严格 {shot_seconds} 秒：当前是 `{row['seconds']}`。"
+                )
+            expected_start_second = end_second
+
+        expected_shot_num += 1
+
+    return issues
+
+
 def tail_excerpt(text: str, max_chars: int = 1800) -> str:
     stripped = text.strip()
     if len(stripped) <= max_chars:
@@ -1283,23 +1333,26 @@ def build_scene_prompt_pack(
             "- 本场至少出现 2 次有效推进：试探、反压、拿证据、交易、拆穿、逃脱、反打、暴露风险等任选其二。",
             "- 本场对白要短狠有信息量，默认至少 3 句有效对白。",
             f"- 本场结尾：{bridge_hint}",
-            "- 每个镜头单元默认 5 秒上下，禁止把两个以上关键动作糊成同一个长镜头。",
+            f"- 每个镜头单元必须严格等于 {shot_seconds} 秒，不是“大约 {shot_seconds} 秒”。",
+            "- 镜头表必须写成连续时间段：`0-5秒`、`5-10秒`、`10-15秒`……不允许 `0-8秒`、`约5秒`、`5秒左右` 这种写法。",
+            "- 每个镜头单元只允许 1 个主要动作节拍 + 最多 1 句台词；如果要连续做两件关键事，就拆成两个镜头文件。",
             "- 宁可缩短 `(光影)/(镜头)/(画质)` 修饰词，也不要把动作、反转和对白压没。",
             "",
             "## 输出格式",
             f"1. 先只输出 `场景{scene_num}:` 这一场的完整剧本块。",
             "2. 剧本块格式仍保持：场景标题 / 环境空镜 / 主体 / 环境 / 动作 / 光影 / 镜头 / 画质 / 台词。",
             "3. 剧本块后追加 `## 5秒镜头单元表`。",
-            f"4. `## 5秒镜头单元表` 必须拆成约 {video_unit_count} 行，每行约 {shot_seconds} 秒。",
+            f"4. `## 5秒镜头单元表` 必须拆成约 {video_unit_count} 行，且每行必须严格 {shot_seconds} 秒。",
             "5. 单元表列建议：镜头 | 秒数 | 画面目标 | 人物/动作 | 台词/口型 | 承上启下。",
             "6. 每个镜头单元都要能直接喂给 5 秒视频工具，不要写成抽象总结；每行都要写清具体起点动作、画面结果和口型内容。",
-            f"7. 生成结果默认保存到 `runtime/episode-{episode_num:04d}/scene-{scene_num:02d}/scene.md`。",
-            "8. 不要输出其他场景，不要输出解释说明。",
+            "7. 一行里如果出现两个以上并列动作，视为拆分失败，必须继续拆细。",
+            f"8. 生成结果默认保存到 `runtime/episode-{episode_num:04d}/scene-{scene_num:02d}/scene.md`。",
+            "9. 不要输出其他场景，不要输出解释说明。",
             "",
             "## 生成前自检",
             "- 当前场是否真的发生了升级，而不是停在“发现线索”？",
             "- 当前场的爽点/压制/反打是否能在画面里直接看出来？",
-            "- 镜头单元表是否能覆盖当前场的完整剧情，不会出现中间断档？",
+            f"- 镜头单元表是否严格是 `{shot_seconds}` 秒一格的连续切片，不会出现 8 秒、10 秒这种长镜头？",
         ]
     )
     return "\n".join(prompt_lines).rstrip() + "\n"
@@ -1370,10 +1423,16 @@ def build_shot_prompt_pack(
     previous_shot_excerpt = tail_excerpt(read_text(previous_shot_path), max_chars=900) if previous_shot_path else ""
 
     scene_header = ""
+    scene_summary = ""
     for line in scene_body.splitlines():
         stripped = line.strip()
-        if stripped.startswith("场景"):
+        if not stripped:
+            continue
+        if not scene_header and stripped.startswith("场景"):
             scene_header = stripped
+            continue
+        if not scene_summary and not stripped.startswith("## "):
+            scene_summary = stripped
             break
     bridge_hint = (
         "镜头结尾必须稳住本场强卡点，不要再额外发散。"
@@ -1417,8 +1476,9 @@ def build_shot_prompt_pack(
         "## 邻近镜头拆分表",
         *build_shot_plan_excerpt(shot_rows, shot_num),
         "",
-        f"[当前场原稿: {scene_display_path}]",
-        scene_body or "当前场原稿为空，请先补齐场景文件。",
+        f"- 当前场参考文件：{scene_display_path}",
+        f"- 当前场标题：{scene_header or f'场景{scene_num}'}",
+        f"- 当前场摘要：{scene_summary or '以当前镜头行和场景卡为准，不要扩成整场。'}",
     ]
 
     if previous_scene_excerpt:
@@ -1444,24 +1504,28 @@ def build_shot_prompt_pack(
             "",
             "## 单镜头要求",
             "- 只覆盖当前这一镜头，不要偷写下一个镜头的动作结果。",
-            "- 镜头内部至少写清起点动作、关键变化和收束结果，不能只写一个静态姿势。",
-            "- 细化人物表情、道具交互、机位、运动方式和口型，但不要重新扩成整场或整集。",
+            "- 这是严格 5 秒镜头，只允许 1 个主要动作节拍；如果需要第二个关键动作，就说明上一层拆分失败，不能在这里硬塞。",
+            "- 只细化当前镜头的表情、道具交互、机位、运动方式和口型，不要重新扩成整场或整集。",
+            "- 当前镜头台词最多 1 句；如果需要第二句对白，拆到下一个镜头。",
             "- 如果当前镜头没有台词，也要明确口型为空、动作承担推进。",
             f"- {bridge_hint}",
             "- 宁可把一个动作拆细，也不要把两个节拍压进同一句抽象总结。",
+            "- 输出文本总量控制在一个短镜头能承载的颗粒度，不要写成长段分镜小说。",
             "",
             "## 输出格式",
             f"1. 只输出 `镜头{shot_num}:` 这一镜头。",
             f"2. 标题建议：`镜头{shot_num}: {scene_header or f'场景{scene_num}'}({current_shot_row['seconds']})`。",
             "3. 正文结构：`(主体)` / `(环境)` / `(动作)` / `(光影)` / `(镜头)` / `(画质)` / `台词:`。",
-            "4. 台词只保留当前镜头真正会说出的句子，不要偷带后续镜头内容。",
-            f"5. 生成结果默认保存到 `runtime/episode-{episode_num:04d}/scene-{scene_num:02d}/shot-{shot_num:03d}.md`。",
-            "6. 不要输出解释，不要输出其他镜头。",
+            "4. `(动作)` 只写当前 5 秒内的起点动作和结束状态，不要写下一个镜头的结果。",
+            "5. 台词只保留当前镜头真正会说出的 0-1 句，不要偷带后续镜头内容。",
+            f"6. 生成结果默认保存到 `runtime/episode-{episode_num:04d}/scene-{scene_num:02d}/shot-{shot_num:03d}.md`。",
+            "7. 不要输出解释，不要输出其他镜头。",
             "",
             "## 生成前自检",
             "- 这个镜头单独拿出来，观众能看懂它的动作目标和结果吗？",
             "- 这个镜头有没有偷偷吃掉下一个镜头的剧情？",
             "- 这个镜头的台词、表情、机位是否都服务于当前 5 秒，而不是泛泛补描写？",
+            "- 这个镜头里是否只剩 1 个主要动作节拍，而不是 2-3 个节拍串在一起？",
         ]
     )
     return "\n".join(prompt_lines).rstrip() + "\n"
@@ -1563,6 +1627,14 @@ def command_compose_shots(args: argparse.Namespace) -> int:
     shot_rows = parse_shot_plan_rows(read_text(scene_path))
     if not shot_rows:
         print("Compose-shots 失败：当前场正文里没有可解析的 `## 5秒镜头单元表` 或 `## 镜头拆分表`。")
+        return 1
+
+    shot_plan_issues = validate_shot_plan_rows(shot_rows, args.shot_seconds)
+    if shot_plan_issues:
+        print("Compose-shots 失败：当前场的镜头拆分表不满足严格 5 秒分镜规则。")
+        for item in shot_plan_issues:
+            print(f"- {item}")
+        print("请先重写当前场的镜头拆分表，再继续生成单镜头文件。")
         return 1
 
     available_shot_nums = [int(row["shot"]) for row in shot_rows]
@@ -1936,6 +2008,7 @@ def build_parser() -> argparse.ArgumentParser:
     compose_shots_parser.add_argument("--scene-num", type=int, required=True)
     compose_shots_parser.add_argument("--shot-num", type=int)
     compose_shots_parser.add_argument("--scene-file")
+    compose_shots_parser.add_argument("--shot-seconds", type=int, default=5)
     compose_shots_parser.add_argument("--title")
     compose_shots_parser.add_argument("--core-event")
 

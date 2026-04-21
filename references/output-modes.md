@@ -23,11 +23,11 @@
 - 去 `---`
 - 优先结构清楚、镜头可读
 
-如果下游 AI 视频工具一次只能生成约 5 秒：
+如果下游 AI 视频工具一次只能生成 5 秒：
 
 - 不要要求它直接吃完整集
 - 先用 `compose-scenes` 把一集拆进 `runtime/episode-XXXX/scene-YY/`
-- 每场再用 `compose-shots` 拆成单镜头 Prompt Pack
+- 每场先写严格连续的 5 秒镜头表，再用 `compose-shots` 拆成单镜头 Prompt Pack
 - 每次只生成一个镜头，结果保存到对应场景目录
 - 最终把分场正文用 `stitch-scenes` 拼回整集
 

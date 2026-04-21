@@ -84,6 +84,7 @@
 - 不要硬写整集，改走单集目录化流程
 - 先用 `compose-scenes` 生成单场 Prompt Pack
 - 每场结果另存为 `runtime/episode-XXXX/scene-YY/scene.md`
+- `scene.md` 里的镜头表必须严格写成 `0-5秒 / 5-10秒 / 10-15秒` 这种连续 5 秒切片
 - 再用 `compose-shots` 从 `scene.md` 里按镜头拆出 `shot-001.prompt.md`
 - 每次只生成一个镜头，结果另存为 `runtime/episode-XXXX/scene-YY/shot-001.md`
 - 最后再用 `stitch-scenes` 拼回整集

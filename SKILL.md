@@ -158,9 +158,9 @@ python3 scripts/episode_pipeline.py compose-shots <项目目录> --episode-num <
 python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <集数>
 ```
 
-`compose-scenes` 会在 `runtime/episode-XXXX/scene-YY/` 下生成单场 Prompt Pack，并要求当前场补出约 5 秒一段的镜头单元表。
+`compose-scenes` 会在 `runtime/episode-XXXX/scene-YY/` 下生成单场 Prompt Pack，并要求当前场补出严格按 `0-5秒 / 5-10秒 / 10-15秒` 连续切开的镜头单元表。
 
-`compose-shots` 会读取 `scene.md` 里的镜头单元表，再把单个镜头拆成独立 Prompt Pack。推荐目录：
+`compose-shots` 会读取 `scene.md` 里的镜头单元表，再把单个镜头拆成独立 Prompt Pack；如果发现某行不是严格 5 秒，直接拒绝生成。推荐目录：
 
 - `runtime/episode-XXXX/plan.md`
 - `runtime/episode-XXXX/scene-01/scene.prompt.md`
@@ -168,7 +168,7 @@ python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <
 - `runtime/episode-XXXX/scene-01/shot-001.prompt.md`
 - `runtime/episode-XXXX/scene-01/shot-001.md`
 
-如果下游视频工具一次只能吃 5 秒左右镜头，默认就该走这条目录化流程，每次只生成一个镜头，不要让模型一口气写几十秒。
+如果下游视频工具一次只能吃 5 秒镜头，默认就该走这条目录化流程，每次只生成一个镜头，不要让模型一口气写几十秒。
 
 4. 如果要交付完整剧本，必须满足：
    - 交付的是剧本格式，不是小说段落
@@ -177,7 +177,7 @@ python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <
    - 3 秒内进入冲突
    - 每集至少 3 个爽点
    - 每场至少完成“目标 -> 阻碍 -> 变化”三步，不得整场只解释信息
-   - 如果下游视频工具只能生成 5 秒左右镜头，必须能继续拆成 5 秒单元，不要把剧情绑死在单个长场景里
+   - 如果下游视频工具只能生成 5 秒镜头，镜头表必须严格拆成连续 5 秒单元，不要把剧情绑死在单个长镜头里
    - 首场景写主角完整外貌，后续只写服装变化
 
 5. 写完后必须先跑：
