@@ -65,8 +65,8 @@ WORKFLOW_LAYER_CATALOG: list[dict[str, Any]] = [
     {
         "id": "next-episode",
         "title": "继续写下一集",
-        "steps": ["preflight", "resume", "plan", "compose"],
-        "summary": "进入新一集前的标准准备链。",
+        "steps": ["preflight", "resume", "plan", "compose-scenes"],
+        "summary": "进入新一集前的标准准备链，默认只生成分场规划 prompt，不再直接生成整集剧本。",
     },
     {
         "id": "review",
@@ -1605,6 +1605,15 @@ def build_shot_prompt_pack(
 
 
 def command_compose(args: argparse.Namespace) -> int:
+    if not getattr(args, "allow_full_episode", False):
+        print("Compose 已默认禁用：当前工作流不再允许一次性生成整集剧本。")
+        print("请改用以下链路：")
+        print("- `plan` 生成场景卡")
+        print("- `compose-scenes` 生成单场规划 prompt")
+        print("- `compose-shots` 从单场规划里逐镜头生成 prompt")
+        print("如果你确实要手动触发整集输出，必须显式传 `--allow-full-episode`。")
+        return 1
+
     project_dir = ensure_project_dir(Path(args.project_dir))
     title, core_event = resolve_episode_meta(project_dir, args.episode_num, args.title, args.core_event)
     blockers, warnings = collect_episode_context_issues(project_dir, args.episode_num, title, core_event)
@@ -2050,13 +2059,15 @@ def command_next_episode(args: argparse.Namespace) -> int:
     if plan_status != 0:
         return plan_status
 
-    return command_compose(
+    return command_compose_scenes(
         argparse.Namespace(
             project_dir=args.project_dir,
             episode_num=args.episode_num,
+            scene_num=None,
             title=args.title,
             core_event=args.core_event,
             target_duration=args.target_duration,
+            shot_seconds=args.shot_seconds,
         )
     )
 
@@ -2097,6 +2108,7 @@ def build_parser() -> argparse.ArgumentParser:
     compose_parser.add_argument("--title")
     compose_parser.add_argument("--core-event")
     compose_parser.add_argument("--target-duration", default="3-5分钟")
+    compose_parser.add_argument("--allow-full-episode", action="store_true")
 
     compose_scenes_parser = subparsers.add_parser("compose-scenes")
     compose_scenes_parser.add_argument("project_dir")
@@ -2129,6 +2141,7 @@ def build_parser() -> argparse.ArgumentParser:
     next_episode_parser.add_argument("--core-event")
     next_episode_parser.add_argument("--target-duration", default="3-5分钟")
     next_episode_parser.add_argument("--scene-count", type=int, default=4)
+    next_episode_parser.add_argument("--shot-seconds", type=int, default=5)
 
     check_parser = subparsers.add_parser("check")
     check_parser.add_argument("script_path")

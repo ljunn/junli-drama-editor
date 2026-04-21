@@ -33,12 +33,12 @@ python3 scripts/episode_pipeline.py init-project "项目名" --path ./output
 # 继续写下一集
 python3 scripts/episode_pipeline.py next-episode <项目目录> --episode-num <集数>
 
-# 生成单集 Prompt Pack
-python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数>
-
 # 先分场，再拆单镜头
 python3 scripts/episode_pipeline.py compose-scenes <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py compose-shots <项目目录> --episode-num <集数> --scene-num <场景号> --shot-num <镜头号>
+
+# 只有明确要整集输出时，才允许这样做
+python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数> --allow-full-episode
 
 # 结构化质检
 python3 scripts/episode_pipeline.py review <剧本文件路径>

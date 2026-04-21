@@ -1,8 +1,14 @@
 # 单集 Prompt 模板
 
-优先用 `python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数>` 自动生成 Prompt Pack。
+默认不要直接用整集 `compose`。
 
-如果模型输出长度紧，或下游视频工具只能吃 5 秒镜头，改用 `compose-scenes` 先生成单场 Prompt Pack，再用 `compose-shots` 继续拆成单镜头 Prompt Pack，不要硬写整集。
+默认应使用 `compose-scenes` 先生成单场 Prompt Pack，再用 `compose-shots` 继续拆成单镜头 Prompt Pack，不要硬写整集。
+
+只有在你明确需要整集输出时，才手动使用：
+
+```bash
+python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数> --allow-full-episode
+```
 
 如果手动拼 Prompt，至少保证下面这些上下文都在。
 

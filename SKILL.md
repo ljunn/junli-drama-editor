@@ -145,10 +145,16 @@ python3 scripts/episode_pipeline.py resume <项目目录>
 
 ```bash
 python3 scripts/episode_pipeline.py plan <项目目录> --episode-num <集数>
-python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数>
+python3 scripts/episode_pipeline.py compose-scenes <项目目录> --episode-num <集数>
 ```
 
-`compose` 只生成 Prompt Pack，不直接把正文写进 `episodes/`；最终剧本在 `finish` 时会自动归档成 `episodes/episode-XXXX.md`。
+默认不再直接走整集 `compose`。新一集先生成分场规划 prompt，再逐镜头生成。
+
+如果你确实要手动触发整集输出，必须显式使用：
+
+```bash
+python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数> --allow-full-episode
+```
 
 如果当前模型或视频工具一次吃不下整集，改用：
 
@@ -241,7 +247,7 @@ python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件
 - 再确认项目已达最小可写标准
 - 读取顺序固定：`task_log.md` -> `linenew.md` -> `state/角色状态.md` -> `state/伏笔列表.md` -> `state/剧集历史.md` -> 相关上一集剧本
 - 恢复输出至少包含：最近 2-3 集摘要、当前角色知情状态、活跃伏笔、下一集目标
-- 先做场景卡，再写剧本；`compose` 默认会把 `task_log`、最近 2-3 集摘要、场景卡和上一集剧本尾段打包进 Prompt Pack
+- 先做场景卡，再生成分场规划 prompt，不要默认直接整集输出
 
 ### C. 单集返修 / 格式化 / 质检
 
@@ -353,7 +359,7 @@ python3 scripts/episode_pipeline.py init "项目名" --path <输出目录>
 python3 scripts/episode_pipeline.py preflight <项目目录>
 python3 scripts/episode_pipeline.py resume <项目目录>
 python3 scripts/episode_pipeline.py plan <项目目录> --episode-num <集数>
-python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数>
+python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数> --allow-full-episode
 python3 scripts/episode_pipeline.py compose-scenes <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py compose-shots <项目目录> --episode-num <集数> --scene-num <场景号> --shot-num <镜头号>
 python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <集数>
