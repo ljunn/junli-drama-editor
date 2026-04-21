@@ -158,7 +158,7 @@ python3 scripts/episode_pipeline.py compose-shots <项目目录> --episode-num <
 python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <集数>
 ```
 
-`compose-scenes` 会在 `runtime/episode-XXXX/scene-YY/` 下生成单场 Prompt Pack，并要求当前场补出严格按 `0-5秒 / 5-10秒 / 10-15秒` 连续切开的镜头单元表。
+`compose-scenes` 会在 `runtime/episode-XXXX/scene-YY/` 下生成单场 Prompt Pack，并要求当前场只输出“当前场摘要 + 严格按 `0-5秒 / 5-10秒 / 10-15秒` 连续切开的镜头单元表”，不准再写长场景正文。
 
 `compose-shots` 会读取 `scene.md` 里的镜头单元表，再把单个镜头拆成独立 Prompt Pack；如果发现某行不是严格 5 秒，直接拒绝生成。推荐目录：
 
@@ -168,7 +168,7 @@ python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <
 - `runtime/episode-XXXX/scene-01/shot-001.prompt.md`
 - `runtime/episode-XXXX/scene-01/shot-001.md`
 
-如果下游视频工具一次只能吃 5 秒镜头，默认就该走这条目录化流程，每次只生成一个镜头，不要让模型一口气写几十秒。
+如果下游视频工具一次只能吃 5 秒镜头，默认就该走这条目录化流程，每次只生成一个镜头，不要让模型一口气写几十秒。`scene.md` 只是规划稿，不是最终场景正文。
 
 4. 如果要交付完整剧本，必须满足：
    - 交付的是剧本格式，不是小说段落

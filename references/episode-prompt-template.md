@@ -34,6 +34,7 @@
 
 如果要继续拆成单镜头：
 - 先保存单场结果到 `runtime/episode-XXXX/scene-YY/scene.md`
+- `scene.md` 里只保留当前场摘要和镜头表，不要写完整长场景正文
 - 再读取其中的 `## 5秒镜头单元表`，并确保每一行都是 `0-5秒 / 5-10秒 / 10-15秒` 这种连续 5 秒区间
 - 每次只生成一个镜头，保存到 `runtime/episode-XXXX/scene-YY/shot-001.md`
 

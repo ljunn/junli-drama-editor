@@ -27,7 +27,7 @@
 
 - 不要要求它直接吃完整集
 - 先用 `compose-scenes` 把一集拆进 `runtime/episode-XXXX/scene-YY/`
-- 每场先写严格连续的 5 秒镜头表，再用 `compose-shots` 拆成单镜头 Prompt Pack
+- 每场先写场景摘要 + 严格连续的 5 秒镜头表，再用 `compose-shots` 拆成单镜头 Prompt Pack
 - 每次只生成一个镜头，结果保存到对应场景目录
 - 最终把分场正文用 `stitch-scenes` 拼回整集
 

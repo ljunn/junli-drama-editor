@@ -129,12 +129,14 @@ python3 scripts/episode_pipeline.py compose-shots <项目目录> --episode-num <
 - `runtime/episode-XXXX/scene-02/scene.prompt.md`
 - ...
 
-`compose-scenes` 先要求模型只处理一个场景，并在场景结果里补出严格连续的 5 秒镜头单元表，例如 `0-5秒 / 5-10秒 / 10-15秒`。
+`compose-scenes` 先要求模型只处理一个场景的规划稿，只输出“当前场摘要 + 严格连续的 5 秒镜头单元表”，例如 `0-5秒 / 5-10秒 / 10-15秒`，不再输出 `场景1(0-40秒)` 这种长正文。
 
 分场结果建议保存为：
 
 - `runtime/episode-XXXX/scene-01/scene.md`
 - `runtime/episode-XXXX/scene-02/scene.md`
+
+这里的 `scene.md` 现在是规划文件，不是完整场景剧本。
 
 然后用 `compose-shots` 从单场结果里继续拆出单镜头 Prompt Pack：
 
@@ -145,6 +147,8 @@ python3 scripts/episode_pipeline.py compose-shots <项目目录> --episode-num <
 这条链路的目标是：每次只生成一个镜头，宁可拆细，不要几十秒一块糊过去。
 
 `compose-shots` 会先校验镜头表。如果某一行不是严格 5 秒，或者时间段不连续，它会直接失败，不再继续生成长镜头文件。
+
+`stitch-scenes` 现在优先拼 `shot-001.md` 这类镜头文件，不再默认把 `scene.md` 当最终场景正文来拼。
 
 写完后可用：
 

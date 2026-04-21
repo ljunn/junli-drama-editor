@@ -662,6 +662,19 @@ def find_scene_output_files(project_dir: Path, episode_num: int) -> list[tuple[i
     return sorted(scene_files.items(), key=lambda item: item[0])
 
 
+def assemble_scene_from_shot_files(project_dir: Path, episode_num: int, scene_num: int) -> str:
+    shot_files = find_shot_output_files(project_dir, episode_num, scene_num)
+    if not shot_files:
+        return ""
+
+    stitched_parts: list[str] = []
+    for _, path in shot_files:
+        content = read_text(path).strip()
+        if content:
+            stitched_parts.append(content)
+    return "\n\n".join(stitched_parts).rstrip()
+
+
 def parse_markdown_table_rows(text: str, header_patterns: tuple[str, ...]) -> list[tuple[str, ...]]:
     rows: list[tuple[str, ...]] = []
     table_started = False
@@ -691,6 +704,13 @@ def extract_shot_table_section(text: str) -> str:
 
 def extract_scene_body_without_shot_table(text: str) -> str:
     return re.sub(r"(?ms)\n## (?:5秒镜头单元表|镜头拆分表)\n.*$", "", text).strip()
+
+
+def extract_scene_brief_text(text: str) -> str:
+    brief_section = extract_section(text, "当前场摘要")
+    if brief_section:
+        return brief_section.strip()
+    return extract_scene_body_without_shot_table(text)
 
 
 def parse_shot_index(value: str) -> int | None:
@@ -1328,30 +1348,31 @@ def build_scene_prompt_pack(
         [
             "",
             "## 分场要求",
-            "- 只输出当前这一场，不要把后续场景提前写出来。",
-            "- 本场内部也要完成“目标 -> 阻碍 -> 变化”三步，不能只做信息复述。",
-            "- 本场至少出现 2 次有效推进：试探、反压、拿证据、交易、拆穿、逃脱、反打、暴露风险等任选其二。",
-            "- 本场对白要短狠有信息量，默认至少 3 句有效对白。",
+            "- 只输出当前这一场的规划稿，不要写完整场景剧本，不要把后续场景提前写出来。",
+            "- 这一层只负责产出“当前场摘要 + 严格 5 秒镜头表”，不负责写 40 秒、60 秒的长场景正文。",
+            "- 当前场摘要只保留地点、人物、目标、冲突、出场变化，必须短，不能写成长块对白和动作。",
+            "- 本场内部也要完成“目标 -> 阻碍 -> 变化”三步，但要拆进镜头表里，不要堆成一个长场景块。",
             f"- 本场结尾：{bridge_hint}",
             f"- 每个镜头单元必须严格等于 {shot_seconds} 秒，不是“大约 {shot_seconds} 秒”。",
             "- 镜头表必须写成连续时间段：`0-5秒`、`5-10秒`、`10-15秒`……不允许 `0-8秒`、`约5秒`、`5秒左右` 这种写法。",
             "- 每个镜头单元只允许 1 个主要动作节拍 + 最多 1 句台词；如果要连续做两件关键事，就拆成两个镜头文件。",
             "- 宁可缩短 `(光影)/(镜头)/(画质)` 修饰词，也不要把动作、反转和对白压没。",
+            "- 禁止输出 `场景1: 地点(0-40秒)` 这种长场景正文；一旦写出这种东西，视为失败。",
             "",
             "## 输出格式",
-            f"1. 先只输出 `场景{scene_num}:` 这一场的完整剧本块。",
-            "2. 剧本块格式仍保持：场景标题 / 环境空镜 / 主体 / 环境 / 动作 / 光影 / 镜头 / 画质 / 台词。",
-            "3. 剧本块后追加 `## 5秒镜头单元表`。",
+            f"1. 先输出 `## 当前场摘要`，只写 4-6 行短条目。",
+            "2. `## 当前场摘要` 建议字段：地点 / 人物 / 入场状态 / 当前场目标 / 当前场冲突 / 出场变化。",
+            "3. 然后输出 `## 5秒镜头单元表`。",
             f"4. `## 5秒镜头单元表` 必须拆成约 {video_unit_count} 行，且每行必须严格 {shot_seconds} 秒。",
             "5. 单元表列建议：镜头 | 秒数 | 画面目标 | 人物/动作 | 台词/口型 | 承上启下。",
             "6. 每个镜头单元都要能直接喂给 5 秒视频工具，不要写成抽象总结；每行都要写清具体起点动作、画面结果和口型内容。",
             "7. 一行里如果出现两个以上并列动作，视为拆分失败，必须继续拆细。",
             f"8. 生成结果默认保存到 `runtime/episode-{episode_num:04d}/scene-{scene_num:02d}/scene.md`。",
-            "9. 不要输出其他场景，不要输出解释说明。",
+            "9. 不要输出完整场景剧本，不要输出 `场景X:` 长正文，不要输出解释说明。",
             "",
             "## 生成前自检",
             "- 当前场是否真的发生了升级，而不是停在“发现线索”？",
-            "- 当前场的爽点/压制/反打是否能在画面里直接看出来？",
+            "- 你有没有误写成长场景正文？如果有，删掉，只保留摘要和镜头表。",
             f"- 镜头单元表是否严格是 `{shot_seconds}` 秒一格的连续切片，不会出现 8 秒、10 秒这种长镜头？",
         ]
     )
@@ -1411,7 +1432,7 @@ def build_shot_prompt_pack(
     if not current_shot_row:
         raise ValueError(f"未在 `{scene_path.name}` 中找到镜头{shot_num} 的拆分表行")
 
-    scene_body = extract_scene_body_without_shot_table(scene_text)
+    scene_brief = extract_scene_brief_text(scene_text)
     try:
         scene_display_path = scene_path.relative_to(project_dir)
     except ValueError:
@@ -1422,18 +1443,9 @@ def build_shot_prompt_pack(
     previous_shot_path = previous_shot_outputs.get(shot_num - 1)
     previous_shot_excerpt = tail_excerpt(read_text(previous_shot_path), max_chars=900) if previous_shot_path else ""
 
-    scene_header = ""
-    scene_summary = ""
-    for line in scene_body.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if not scene_header and stripped.startswith("场景"):
-            scene_header = stripped
-            continue
-        if not scene_summary and not stripped.startswith("## "):
-            scene_summary = stripped
-            break
+    scene_header = f"场景{scene_num}"
+    scene_summary_lines = [line.strip() for line in scene_brief.splitlines() if line.strip()]
+    scene_summary = " / ".join(scene_summary_lines[:3])
     bridge_hint = (
         "镜头结尾必须稳住本场强卡点，不要再额外发散。"
         if shot_num == len(shot_rows)
@@ -1668,28 +1680,52 @@ def command_compose_shots(args: argparse.Namespace) -> int:
 
 def command_stitch_scenes(args: argparse.Namespace) -> int:
     project_dir = ensure_project_dir(Path(args.project_dir))
-    scene_files = find_scene_output_files(project_dir, args.episode_num)
-    if not scene_files:
-        print("Stitch-scenes 失败：未找到任何分场正文文件。")
-        print("请把每场结果保存成 `runtime/episode-XXXX/scene-YY/scene.md`，或兼容旧路径 `runtime/episode-XXXX.scene-YY.md`。")
+    plan_rows = parse_scene_plan_rows(read_text(plan_path_for_episode(project_dir, args.episode_num)))
+    if plan_rows:
+        target_scene_nums = [int(row["scene"]) for row in plan_rows]
+    else:
+        scene_files = find_scene_output_files(project_dir, args.episode_num)
+        target_scene_nums = [scene_num for scene_num, _ in scene_files]
+
+    if not target_scene_nums:
+        print("Stitch-scenes 失败：未找到可拼装的场景。")
+        print("请先生成镜头文件 `shot-001.md`，或兼容旧路径的整场正文。")
         return 1
 
-    plan_rows = parse_scene_plan_rows(read_text(plan_path_for_episode(project_dir, args.episode_num)))
-    expected_count = len(plan_rows) if plan_rows else None
-    available_scene_nums = [scene_num for scene_num, _ in scene_files]
-    if expected_count is not None:
-        missing_scene_nums = [scene_num for scene_num in range(1, expected_count + 1) if scene_num not in available_scene_nums]
-        if missing_scene_nums:
-            print("Stitch-scenes 失败：缺少以下场景正文文件：")
-            for scene_num in missing_scene_nums:
-                print(f"- scene-{scene_num:02d}")
-            return 1
+    stitched_parts: list[str] = []
+    stitched_sources: list[str] = []
+    missing_scene_nums: list[int] = []
+    for scene_num in target_scene_nums:
+        shot_assembled_text = assemble_scene_from_shot_files(project_dir, args.episode_num, scene_num)
+        if shot_assembled_text:
+            stitched_parts.append(shot_assembled_text)
+            stitched_sources.append(f"- scene-{scene_num:02d}: 来自 shot 文件")
+            continue
 
-    stitched_parts = []
-    for _, path in scene_files:
-        content = read_text(path).strip()
-        if content:
-            stitched_parts.append(content)
+        legacy_scene_path = None
+        for candidate in (
+            legacy_scene_output_path_for_episode(project_dir, args.episode_num, scene_num, ".md"),
+            legacy_scene_output_path_for_episode(project_dir, args.episode_num, scene_num, ".txt"),
+        ):
+            if candidate.exists():
+                legacy_scene_path = candidate
+                break
+
+        if legacy_scene_path:
+            content = read_text(legacy_scene_path).strip()
+            if content:
+                stitched_parts.append(content)
+                stitched_sources.append(f"- scene-{scene_num:02d}: {legacy_scene_path}")
+                continue
+
+        missing_scene_nums.append(scene_num)
+
+    if missing_scene_nums:
+        print("Stitch-scenes 失败：缺少以下场景镜头文件或兼容旧版整场正文：")
+        for scene_num in missing_scene_nums:
+            print(f"- scene-{scene_num:02d}")
+        return 1
+
     if not stitched_parts:
         print("Stitch-scenes 失败：找到文件，但内容为空。")
         return 1
@@ -1699,8 +1735,8 @@ def command_stitch_scenes(args: argparse.Namespace) -> int:
     output_path.write_text("\n\n".join(stitched_parts).rstrip() + "\n", encoding="utf-8")
 
     print(output_path)
-    for scene_num, path in scene_files:
-        print(f"- scene-{scene_num:02d}: {path}")
+    for item in stitched_sources:
+        print(item)
     return 0
 
 
