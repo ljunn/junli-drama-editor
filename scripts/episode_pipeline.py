@@ -16,6 +16,9 @@ except ModuleNotFoundError:
     from scripts.new_project import create_drama_project, load_seed
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 REQUIRED_CORE_FILES = (
     "series-bible.md",
     "character-design.md",
@@ -140,6 +143,7 @@ TEXT_SCRIPT_EXTENSIONS = (".md", ".txt")
 MIN_EFFECTIVE_SCRIPT_CHARS = 1200
 MIN_DIALOGUE_LINES_PER_SCENE = 3
 MIN_DIALOGUE_LINES_TOTAL = 12
+FINISH_BLOCKING_RISK_WORD_THRESHOLD = 3
 
 DIALOGUE_LINE_PATTERN = re.compile(
     r"(?m)^(?!场景\d+[:：])(?!台词[:：])(?![【(（\-#])[^:\n：]{1,20}[:：]\s*(?!$)"
@@ -170,6 +174,18 @@ def extract_labeled_value(text: str, label: str, default: str = "") -> str:
 def extract_section(text: str, header: str) -> str:
     match = re.search(rf"(?ms)^## {re.escape(header)}\n(.*?)(?=^## |\Z)", text)
     return match.group(1).strip() if match else ""
+
+
+def extract_section_by_heading_query(text: str, heading_query: str) -> str:
+    matches = list(re.finditer(r"(?m)^## .*$", text))
+    for index, match in enumerate(matches):
+        heading = match.group(0)
+        if heading_query not in heading:
+            continue
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        return text[start:end].strip()
+    return ""
 
 
 def count_filled_labeled_values(text: str) -> int:
@@ -352,6 +368,34 @@ def collect_preflight_warnings(project_dir: Path) -> list[str]:
         warnings.append("docs/分集梗概.md 仍有占位内容，投稿资料阶段记得补齐。")
 
     return warnings
+
+
+def supporting_role_cards(character_text: str) -> list[tuple[str, str]]:
+    section = extract_section(character_text, "反派 / 关键配角")
+    if not section:
+        return []
+    matches = re.finditer(r"(?ms)^###\s+(.+?)\n(.*?)(?=^### |\Z)", section)
+    return [(match.group(1).strip(), match.group(2).strip()) for match in matches]
+
+
+def supporting_role_context_issues(character_text: str) -> list[str]:
+    section = extract_section(character_text, "反派 / 关键配角")
+    if not section:
+        return ["character-design.md 缺少 `## 反派 / 关键配角` 小节。"]
+    if "按同样结构补齐" in section or "至少补 2 个关键反派/配角" in section:
+        return ["character-design.md 仍是关键配角占位说明，至少补 2 个可驱动对手戏的角色卡。"]
+
+    cards = supporting_role_cards(character_text)
+    if len(cards) < 2:
+        return ["character-design.md 至少补齐 2 个关键反派/配角卡，否则续写时容易失去对手戏压力。"]
+
+    issues: list[str] = []
+    for title, body in cards:
+        for label in ("姓名", "表面身份", "公开目标", "隐藏目标", "主线任务"):
+            value = extract_labeled_value(body, label)
+            if is_placeholder_value(value):
+                issues.append(f"character-design.md 的 `{title}/{label}` 未补齐。")
+    return issues
 
 
 def parse_episode_outline_line(line: str, episode_num: int) -> tuple[str | None, str | None]:
@@ -925,6 +969,8 @@ def collect_episode_context_issues(
     episode_num: int,
     title: str,
     core_event: str,
+    *,
+    require_plan: bool = True,
 ) -> tuple[list[str], list[str]]:
     blockers: list[str] = []
     warnings: list[str] = []
@@ -935,7 +981,7 @@ def collect_episode_context_issues(
         blockers.append("当前集核心事件为空，请在 linenew.md 或 `--core-event` 中补齐。")
 
     plan_path = plan_path_for_episode(project_dir, episode_num)
-    if not plan_path.exists():
+    if require_plan and not plan_path.exists():
         blockers.append(f"未找到场景卡：{plan_path.relative_to(project_dir)}。请先运行 `plan`。")
 
     history_rows = parse_history_rows(read_text(project_dir / "state" / "剧集历史.md"))
@@ -945,10 +991,23 @@ def collect_episode_context_issues(
     if previous_row and previous_row["status"] not in COMPLETED_STATUSES:
         blockers.append(f"第{episode_num - 1}集尚未标记为已完成，先别直接续写第{episode_num}集。")
     if episode_num > 1 and not find_episode_script(project_dir, episode_num - 1):
-        warnings.append(f"未找到第{episode_num - 1}集剧本文件，将只使用历史摘要衔接。")
+        blockers.append(f"未找到第{episode_num - 1}集剧本文件，不能只靠历史摘要硬续写第{episode_num}集。")
 
-    if not extract_episode_synopsis(project_dir, episode_num):
+    synopsis_text = extract_episode_synopsis(project_dir, episode_num)
+    if episode_num > 1 and not synopsis_text:
+        blockers.append(f"docs/分集梗概.md 中未找到第{episode_num}集有效小节，先补分集梗概再续写。")
+    elif not synopsis_text:
         warnings.append(f"docs/分集梗概.md 中未找到第{episode_num}集有效小节，将只使用 linenew.md 核心事件。")
+
+    hook_text = read_text(project_dir / "state" / "伏笔列表.md")
+    has_active_hooks = has_nonempty_table_rows(extract_section(hook_text, "活跃伏笔"))
+    if episode_num > 1 and not has_active_hooks:
+        blockers.append("state/伏笔列表.md 暂无活跃伏笔记录，第 2 集后不能在空钩子状态下硬续写。")
+    elif not has_active_hooks:
+        warnings.append("state/伏笔列表.md 暂无活跃伏笔记录。首轮创作后建议尽快补齐。")
+
+    if episode_num > 1:
+        blockers.extend(supporting_role_context_issues(read_text(project_dir / "character-design.md")))
 
     return blockers, warnings
 
@@ -1181,6 +1240,22 @@ def command_plan(args: argparse.Namespace) -> int:
     if not ready:
         return 1
     title, core_event = resolve_episode_meta(project_dir, args.episode_num, args.title, args.core_event)
+    blockers, warnings = collect_episode_context_issues(
+        project_dir,
+        args.episode_num,
+        title,
+        core_event,
+        require_plan=False,
+    )
+    if blockers:
+        print("Plan 失败：")
+        for item in blockers:
+            print(f"- {item}")
+        return 1
+    if warnings:
+        print("Plan 提醒：")
+        for item in warnings:
+            print(f"- {item}")
     runtime_path = plan_output_path_for_episode(project_dir, args.episode_num)
     runtime_path.write_text(
         build_plan_text(
@@ -1195,6 +1270,29 @@ def command_plan(args: argparse.Namespace) -> int:
     update_task_log_status(project_dir, args.episode_num, title, "场景规划中")
     print(runtime_path)
     return 0
+
+
+def build_reference_excerpt(project_dir: Path, relative_path: str, heading_queries: tuple[str, ...]) -> list[str]:
+    reference_path = project_dir / relative_path
+    if not reference_path.exists():
+        reference_path = REPO_ROOT / relative_path
+    text = read_text(reference_path)
+    if not text:
+        return []
+
+    lines: list[str] = []
+    for heading_query in heading_queries:
+        section = extract_section_by_heading_query(text, heading_query)
+        if not section:
+            continue
+        lines.extend(
+            [
+                f"[{relative_path} / {heading_query}]",
+                section,
+                "",
+            ]
+        )
+    return lines[:-1] if lines else []
 
 
 def build_prompt_pack(project_dir: Path, episode_num: int, title: str, core_event: str, target_duration: str) -> str:
@@ -1217,6 +1315,16 @@ def build_prompt_pack(project_dir: Path, episode_num: int, title: str, core_even
     synopsis_text = extract_episode_synopsis(project_dir, episode_num)
     previous_script_path = find_episode_script(project_dir, episode_num - 1) if episode_num > 1 else None
     previous_script_excerpt = tail_excerpt(read_text(previous_script_path)) if previous_script_path else ""
+    few_shot_lines = build_reference_excerpt(
+        project_dir,
+        "references/good-vs-bad-examples.md",
+        ("小说化 vs 可拍", "无效对白 vs 有功能对白", "软卡点 vs 狠卡点"),
+    )
+    repair_lines = build_reference_excerpt(
+        project_dir,
+        "references/repair-strategies.md",
+        ("对白弱", "卡点软", "小说化"),
+    )
 
     prompt_lines = [
         "你正在续写平台向微短剧。先核对恢复摘要和场景卡；若出现冲突，以状态文件 > 场景计划 > 历史摘要 > 上一集剧本为准。",
@@ -1269,6 +1377,24 @@ def build_prompt_pack(project_dir: Path, episode_num: int, title: str, core_even
                 "",
                 f"[上一集剧本尾段: {previous_script_path.relative_to(project_dir)}]",
                 previous_script_excerpt,
+            ]
+        )
+
+    if few_shot_lines:
+        prompt_lines.extend(
+            [
+                "",
+                "## Few-shot 对照",
+                *few_shot_lines,
+            ]
+        )
+
+    if repair_lines:
+        prompt_lines.extend(
+            [
+                "",
+                "## 定向返修策略",
+                *repair_lines,
             ]
         )
 
@@ -1369,6 +1495,16 @@ def build_scene_prompt_pack(
     scene_count = len(scene_rows)
     video_unit_count = estimate_video_unit_count(current_row["target_seconds"], shot_seconds)
     bridge_hint = "直接把强卡点压到观众脸上。" if scene_num == scene_count else f"结尾必须把悬念和压力明确交给场景{scene_num + 1}。"
+    few_shot_lines = build_reference_excerpt(
+        project_dir,
+        "references/good-vs-bad-examples.md",
+        ("小说化 vs 可拍", "软卡点 vs 狠卡点"),
+    )
+    repair_lines = build_reference_excerpt(
+        project_dir,
+        "references/repair-strategies.md",
+        ("节奏拖", "小说化"),
+    )
 
     prompt_lines = [
         "你正在分场续写平台向微短剧。当前工具一次只处理一个场景，目标是把整集拆成多个可连续生成的场景包。",
@@ -1427,6 +1563,24 @@ def build_scene_prompt_pack(
                 "",
                 f"[本集上一场尾段: {previous_scene_path.relative_to(project_dir)}]",
                 previous_scene_excerpt,
+            ]
+        )
+
+    if few_shot_lines:
+        prompt_lines.extend(
+            [
+                "",
+                "## Few-shot 对照",
+                *few_shot_lines,
+            ]
+        )
+
+    if repair_lines:
+        prompt_lines.extend(
+            [
+                "",
+                "## 定向返修策略",
+                *repair_lines,
             ]
         )
 
@@ -1555,6 +1709,16 @@ def build_shot_prompt_pack(
     previous_shot_outputs = {current_num: path for current_num, path in find_shot_output_files(project_dir, episode_num, scene_num)}
     previous_shot_path = previous_shot_outputs.get(shot_num - 1)
     previous_shot_excerpt = tail_excerpt(read_text(previous_shot_path), max_chars=900) if previous_shot_path else ""
+    few_shot_lines = build_reference_excerpt(
+        project_dir,
+        "references/good-vs-bad-examples.md",
+        ("小说化 vs 可拍", "无效对白 vs 有功能对白"),
+    )
+    repair_lines = build_reference_excerpt(
+        project_dir,
+        "references/repair-strategies.md",
+        ("对白弱", "小说化"),
+    )
 
     scene_header = f"场景{scene_num}"
     scene_summary_lines = [line.strip() for line in scene_brief.splitlines() if line.strip()]
@@ -1621,6 +1785,24 @@ def build_shot_prompt_pack(
                 "",
                 f"[上一镜头结果: {previous_shot_path.relative_to(project_dir)}]",
                 previous_shot_excerpt,
+            ]
+        )
+
+    if few_shot_lines:
+        prompt_lines.extend(
+            [
+                "",
+                "## Few-shot 对照",
+                *few_shot_lines,
+            ]
+        )
+
+    if repair_lines:
+        prompt_lines.extend(
+            [
+                "",
+                "## 定向返修策略",
+                *repair_lines,
             ]
         )
 
@@ -1913,13 +2095,7 @@ def detect_location_changes(headers: list[str]) -> tuple[int, list[str]]:
     return changes, locations
 
 
-def command_check(args: argparse.Namespace) -> int:
-    script_path = Path(args.script_path).resolve()
-    if not script_path.exists():
-        print(f"文件不存在：{script_path}")
-        return 1
-
-    text = read_text(script_path)
+def analyze_script_quality(text: str, max_chars: int) -> dict[str, Any]:
     effective_chars = count_effective_chars(text)
     blank_line_count = sum(1 for line in text.splitlines() if not line.strip())
     separator_count = text.count("---")
@@ -1932,23 +2108,11 @@ def command_check(args: argparse.Namespace) -> int:
     ]
     total_dialogue_lines = sum(dialogue_counts)
 
-    print(f"检查文件：{script_path}")
-    print(f"- 有效字符数：{effective_chars}")
-    print(f"- 场景数：{len(scene_blocks)}")
-    print(f"- 地点切换次数：{location_changes}")
-    if locations:
-        print(f"- 场景地点：{' / '.join(locations)}")
-    print(f"- 有效对白数：{total_dialogue_lines}")
-    if dialogue_counts:
-        print(f"- 单场对白数：{' / '.join(str(count) for count in dialogue_counts)}")
-    print(f"- 空行数：{blank_line_count}")
-    print(f"- --- 分隔符数量：{separator_count}")
-
     errors: list[str] = []
     warnings: list[str] = []
 
-    if effective_chars > args.max_chars:
-        errors.append(f"字符数超标：{effective_chars} > {args.max_chars}")
+    if effective_chars > max_chars:
+        errors.append(f"字符数超标：{effective_chars} > {max_chars}")
     if not scene_blocks:
         errors.append("未检测到任何 `场景X:` 场景块。")
     if not 4 <= len(scene_blocks) <= 5:
@@ -1996,18 +2160,81 @@ def command_check(args: argparse.Namespace) -> int:
     if dialogue_action_matches:
         warnings.append("检测到台词行内含动作或语速说明。")
 
-    if errors:
+    risk_word_counts = {keyword: text.count(keyword) for keyword in BANNED_RISK_WORDS if text.count(keyword)}
+
+    return {
+        "effective_chars": effective_chars,
+        "scene_blocks": scene_blocks,
+        "headers": headers,
+        "location_changes": location_changes,
+        "locations": locations,
+        "dialogue_counts": dialogue_counts,
+        "total_dialogue_lines": total_dialogue_lines,
+        "blank_line_count": blank_line_count,
+        "separator_count": separator_count,
+        "errors": errors,
+        "warnings": warnings,
+        "risk_word_counts": risk_word_counts,
+    }
+
+
+def print_script_quality_report(script_path: Path, report: dict[str, Any]) -> None:
+    print(f"检查文件：{script_path}")
+    print(f"- 有效字符数：{report['effective_chars']}")
+    print(f"- 场景数：{len(report['scene_blocks'])}")
+    print(f"- 地点切换次数：{report['location_changes']}")
+    if report["locations"]:
+        print(f"- 场景地点：{' / '.join(report['locations'])}")
+    print(f"- 有效对白数：{report['total_dialogue_lines']}")
+    if report["dialogue_counts"]:
+        print(f"- 单场对白数：{' / '.join(str(count) for count in report['dialogue_counts'])}")
+    print(f"- 空行数：{report['blank_line_count']}")
+    print(f"- --- 分隔符数量：{report['separator_count']}")
+
+    if report["errors"]:
         print("\n错误：")
-        for item in errors:
+        for item in report["errors"]:
             print(f"- {item}")
-    if warnings:
+    if report["warnings"]:
         print("\n警告：")
-        for item in warnings:
+        for item in report["warnings"]:
             print(f"- {item}")
 
-    if not errors and not warnings:
+    if not report["errors"] and not report["warnings"]:
         print("\n检查通过。")
-    return 1 if errors else 0
+
+
+def collect_finish_quality_blockers(report: dict[str, Any]) -> list[str]:
+    blockers: list[str] = []
+    expected_dialogue_total = max(MIN_DIALOGUE_LINES_TOTAL, len(report["scene_blocks"]) * MIN_DIALOGUE_LINES_PER_SCENE)
+    if report["effective_chars"] < MIN_EFFECTIVE_SCRIPT_CHARS:
+        blockers.append(
+            f"正文偏短：{report['effective_chars']} < {MIN_EFFECTIVE_SCRIPT_CHARS}，这类结果很容易只是结构合规的提纲。"
+        )
+    if report["total_dialogue_lines"] < expected_dialogue_total:
+        blockers.append(
+            f"有效对白偏少：{report['total_dialogue_lines']} < {expected_dialogue_total}，当前文本更像镜头提纲而不是可交付剧本。"
+        )
+    for header, dialogue_count in zip(report["headers"], report["dialogue_counts"]):
+        if dialogue_count < MIN_DIALOGUE_LINES_PER_SCENE:
+            blockers.append(f"{header} 的有效对白少于 {MIN_DIALOGUE_LINES_PER_SCENE} 句。")
+    total_risk_word_hits = sum(report["risk_word_counts"].values())
+    if total_risk_word_hits >= FINISH_BLOCKING_RISK_WORD_THRESHOLD:
+        blockers.append(
+            f"风险词累计出现 {total_risk_word_hits} 次，已超过回写阈值 {FINISH_BLOCKING_RISK_WORD_THRESHOLD}。"
+        )
+    return blockers
+
+
+def command_check(args: argparse.Namespace) -> int:
+    script_path = Path(args.script_path).resolve()
+    if not script_path.exists():
+        print(f"文件不存在：{script_path}")
+        return 1
+
+    report = analyze_script_quality(read_text(script_path), args.max_chars)
+    print_script_quality_report(script_path, report)
+    return 1 if report["errors"] else 0
 
 
 def upsert_history_row(
@@ -2054,10 +2281,18 @@ def command_finish(args: argparse.Namespace) -> int:
     if not script_path.exists():
         print(f"剧本文件不存在：{script_path}")
         return 1
-    check_status = command_check(argparse.Namespace(script_path=args.script_path, max_chars=args.max_chars))
-    if check_status != 0:
+    report = analyze_script_quality(read_text(script_path), args.max_chars)
+    print_script_quality_report(script_path, report)
+    if report["errors"]:
         print("\nFinish 终止：请先修复 `check/review` 的错误项，再回写状态。")
-        return check_status
+        return 1
+    quality_blockers = collect_finish_quality_blockers(report)
+    if quality_blockers and not getattr(args, "allow_quality_warnings", False):
+        print("\nFinish 终止：结构虽然过关，但以下质量风险仍会污染后续状态文件：")
+        for item in quality_blockers:
+            print(f"- {item}")
+        print("如确认要带警告归档，显式传 `--allow-quality-warnings`。")
+        return 1
     archived_script_path = persist_episode_script(project_dir, args.episode_num, script_path)
 
     title, core_event = resolve_episode_meta(project_dir, args.episode_num, args.title, args.core_event)
@@ -2229,6 +2464,11 @@ def build_parser() -> argparse.ArgumentParser:
     finish_parser.add_argument("--core-event")
     finish_parser.add_argument("--summary", required=True)
     finish_parser.add_argument("--max-chars", type=int, default=3000, help="回写前结构检查使用的最大字符数阈值。")
+    finish_parser.add_argument(
+        "--allow-quality-warnings",
+        action="store_true",
+        help="允许带严重质量警告归档剧本。默认会阻断偏短、对白偏少、风险词过多的结果。",
+    )
 
     return parser
 
