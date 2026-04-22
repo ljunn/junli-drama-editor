@@ -69,6 +69,7 @@ python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件
 
 不传 `--scene-num` 或 `--shot-num` 时，命令也只会生成“下一个缺失项”各 1 个 prompt，不会批量生成。
 `plan / compose / compose-scenes / compose-shots / finish` 现在都会先卡 `preflight`，不会再把空模板项目直接推进到 prompt 生成或状态回写。
+从第 2 集开始，`plan / compose / compose-scenes / compose-shots` 还会额外阻断“上一集正文缺失 / 当前集梗概缺失 / 活跃伏笔为空 / 关键反派配角仍是占位”的续写请求。
 
 ## 目录结构
 
@@ -95,8 +96,9 @@ python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件
 2. 新项目如果已经知道最小设定，优先用 `--seed-file` 初始化；裸 `init-project` 只会生成骨架。已有旧骨架时，用 `--force` 重刷标准文件，旧内容会先留 `.bak`。
 3. 开写新一集前，先做 `preflight` 和 `resume`。
 4. 如果下游工具只能吃 5 秒镜头，默认走 `compose-scenes -> compose-shots`，每次只生成一个镜头；`scene.md` 只保留场景摘要和镜头表，不再写成长场景正文，镜头表不是严格 5 秒时，`compose-shots` 会直接报错。
-5. 交付正文前，先做 `review`，再结合 `references/quality-checklist.md` 人工复核。
-6. `finish` 会再次执行结构检查；有错误就拒绝回写状态。
+5. Prompt Pack 现在会自动注入 `references/good-vs-bad-examples.md` 和 `references/repair-strategies.md` 的关键 few-shot 对照，别再只靠抽象规则硬写。
+6. 交付正文前，先做 `review`，再结合 `references/quality-checklist.md` 人工复核。
+7. `finish` 会再次执行结构检查；严重质量警告也会阻断回写。只有你明确接受风险时，才用 `--allow-quality-warnings` 强制归档。
 
 ## 运行环境
 

@@ -52,6 +52,10 @@ def as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def supporting_roles(seed: dict[str, Any]) -> list[dict[str, Any]]:
+    return [item for item in as_list(seed.get("supporting_roles")) if isinstance(item, dict)]
+
+
 def load_seed(seed_file: str | None) -> dict[str, Any]:
     if not seed_file:
         return {}
@@ -108,17 +112,28 @@ def build_history_template() -> str:
 """
 
 
-def build_hooks_template() -> str:
-    return """# 伏笔列表
+def build_hooks_table(headers: list[str], rows: list[dict[str, Any]]) -> list[str]:
+    if rows:
+        return render_markdown_table(headers, rows)
+    return [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join("-" * len(header) for header in headers) + " |",
+    ]
 
-## 活跃伏笔
-| 伏笔名称 | 当前状态 | 首次出现 | 备注 |
-|----------|----------|----------|------|
 
-## 已回收伏笔
-| 伏笔名称 | 回收集数 | 备注 |
-|----------|----------|------|
-"""
+def build_hooks_template(seed: dict[str, Any]) -> str:
+    active_rows = [row for row in as_list(seed.get("active_hooks")) if isinstance(row, dict)]
+    resolved_rows = [row for row in as_list(seed.get("resolved_hooks")) if isinstance(row, dict)]
+    lines = [
+        "# 伏笔列表",
+        "",
+        "## 活跃伏笔",
+        *build_hooks_table(["伏笔名称", "当前状态", "首次出现", "备注"], active_rows),
+        "",
+        "## 已回收伏笔",
+        *build_hooks_table(["伏笔名称", "回收集数", "备注"], resolved_rows),
+    ]
+    return "\n".join(lines)
 
 
 def build_series_bible(project_name: str, seed: dict[str, Any]) -> str:
@@ -182,6 +197,34 @@ def build_character_section(title: str, data: dict[str, Any], include_catchphras
     return lines
 
 
+def build_supporting_role_sections(seed: dict[str, Any]) -> list[str]:
+    roles = supporting_roles(seed)
+    if not roles:
+        return [stringify(seed.get("supporting_roles_note"), "至少补 2 个关键反派/配角，写清公开目标、隐藏目标和主线任务。")]
+
+    lines: list[str] = []
+    for index, role in enumerate(roles, start=1):
+        role_name = stringify(role.get("姓名"), f"关键角色{index}")
+        lines.extend(
+            [
+                f"### {role_name}",
+                "",
+                f"- 姓名：{stringify(role.get('姓名'), role_name)}",
+                f"- 年龄：{stringify(role.get('年龄'))}",
+                f"- 固定外貌：{stringify(role.get('固定外貌'))}",
+                f"- 表面身份：{stringify(role.get('表面身份'))}",
+                f"- 与主角关系：{stringify(role.get('与主角关系'))}",
+                f"- 公开目标：{stringify(role.get('公开目标'))}",
+                f"- 隐藏目标：{stringify(role.get('隐藏目标'))}",
+                f"- 主线任务：{stringify(role.get('主线任务'))}",
+                f"- 当前威胁：{stringify(role.get('当前威胁'))}",
+            ]
+        )
+        if index != len(roles):
+            lines.append("")
+    return lines
+
+
 def build_character_design(seed: dict[str, Any]) -> str:
     female_lead = as_mapping(seed.get("female_lead"))
     male_lead = as_mapping(seed.get("male_lead"))
@@ -198,7 +241,7 @@ def build_character_design(seed: dict[str, Any]) -> str:
         "",
         "## 反派 / 关键配角",
         "",
-        stringify(seed.get("supporting_roles_note"), "按同样结构补齐。"),
+        *build_supporting_role_sections(seed),
         "",
         "## 角色知情状态表",
         "",
@@ -301,22 +344,60 @@ def build_outline(seed: dict[str, Any]) -> str:
     return "\n".join(outline_entries)
 
 
+def supporting_role_names(seed: dict[str, Any]) -> list[str]:
+    names = [stringify(role.get("姓名")) for role in supporting_roles(seed)]
+    return [name for name in names if name]
+
+
+def supporting_state_value(mapping: dict[str, Any], role_name: str, fallback_label: str) -> str:
+    return stringify(mapping.get(role_name), stringify(mapping.get(fallback_label)))
+
+
 def build_role_state(seed: dict[str, Any]) -> str:
     current_states = as_mapping(seed.get("current_states"))
     knowledge_rows = [row for row in as_list(seed.get("state_knowledge")) if isinstance(row, dict)]
     wardrobe = as_mapping(seed.get("wardrobe"))
+    role_names = supporting_role_names(seed)
     if not knowledge_rows:
         knowledge_rows = [{"角色": "", "知道什么": "", "绝对不知道什么": "", "备注": ""}]
+
+    if role_names:
+        current_state_lines = [
+            f"- 女主：{stringify(current_states.get('女主'))}",
+            f"- 男主：{stringify(current_states.get('男主'))}",
+            *[
+                f"- {role_name}：{supporting_state_value(current_states, role_name, f'反派 {index}')}"
+                for index, role_name in enumerate(role_names, start=1)
+            ],
+        ]
+        wardrobe_lines = [
+            f"- 女主：{stringify(wardrobe.get('女主'))}",
+            f"- 男主：{stringify(wardrobe.get('男主'))}",
+            *[
+                f"- {role_name}：{supporting_state_value(wardrobe, role_name, f'反派 {index}')}"
+                for index, role_name in enumerate(role_names, start=1)
+            ],
+        ]
+    else:
+        current_state_lines = [
+            f"- 女主：{stringify(current_states.get('女主'))}",
+            f"- 男主：{stringify(current_states.get('男主'))}",
+            f"- 反派 1：{stringify(current_states.get('反派 1'))}",
+            f"- 反派 2：{stringify(current_states.get('反派 2'))}",
+        ]
+        wardrobe_lines = [
+            f"- 女主：{stringify(wardrobe.get('女主'))}",
+            f"- 男主：{stringify(wardrobe.get('男主'))}",
+            f"- 反派 1：{stringify(wardrobe.get('反派 1'))}",
+            f"- 反派 2：{stringify(wardrobe.get('反派 2'))}",
+        ]
 
     lines = [
         "# 角色状态",
         "",
         "## 当前集后状态",
         "",
-        f"- 女主：{stringify(current_states.get('女主'))}",
-        f"- 男主：{stringify(current_states.get('男主'))}",
-        f"- 反派 1：{stringify(current_states.get('反派 1'))}",
-        f"- 反派 2：{stringify(current_states.get('反派 2'))}",
+        *current_state_lines,
         "",
         "## 知情状态表",
         "",
@@ -324,10 +405,7 @@ def build_role_state(seed: dict[str, Any]) -> str:
         "",
         "## 当前服装与造型",
         "",
-        f"- 女主：{stringify(wardrobe.get('女主'))}",
-        f"- 男主：{stringify(wardrobe.get('男主'))}",
-        f"- 反派 1：{stringify(wardrobe.get('反派 1'))}",
-        f"- 反派 2：{stringify(wardrobe.get('反派 2'))}",
+        *wardrobe_lines,
     ]
     return "\n".join(lines)
 
@@ -380,28 +458,48 @@ def build_story_outline(seed: dict[str, Any]) -> str:
 def build_character_bios(seed: dict[str, Any]) -> str:
     female_lead = as_mapping(seed.get("female_lead"))
     male_lead = as_mapping(seed.get("male_lead"))
-    return f"""# 人物小传
+    lines = [
+        "# 人物小传",
+        "",
+        f"## {stringify(female_lead.get('姓名'), '角色 1')}",
+        "",
+        f"- 基础信息：{stringify(female_lead.get('表面身份'))}",
+        f"- 外观造型：{stringify(female_lead.get('固定外貌'))}",
+        f"- 性格特质：{stringify(female_lead.get('性格'))}",
+        f"- 身份设定：{stringify(female_lead.get('隐藏身份'))}",
+        f"- 技能 / 金手指：{stringify(female_lead.get('技能 / 金手指'))}",
+        f"- 情感线：{stringify(female_lead.get('情感线'))}",
+        f"- 剧情主线：{stringify(female_lead.get('主线任务'))}",
+        "",
+        f"## {stringify(male_lead.get('姓名'), '角色 2')}",
+        "",
+        f"- 基础信息：{stringify(male_lead.get('表面身份'))}",
+        f"- 外观造型：{stringify(male_lead.get('固定外貌'))}",
+        f"- 性格特质：{stringify(male_lead.get('性格'))}",
+        f"- 身份设定：{stringify(male_lead.get('隐藏身份'))}",
+        f"- 技能 / 金手指：{stringify(male_lead.get('技能 / 金手指'))}",
+        f"- 情感线：{stringify(male_lead.get('情感线'))}",
+        f"- 剧情主线：{stringify(male_lead.get('主线任务'))}",
+    ]
 
-## {stringify(female_lead.get('姓名'), '角色 1')}
+    for role in supporting_roles(seed):
+        role_name = stringify(role.get("姓名"), "关键角色")
+        lines.extend(
+            [
+                "",
+                f"## {role_name}",
+                "",
+                f"- 基础信息：{stringify(role.get('表面身份'))}",
+                f"- 外观造型：{stringify(role.get('固定外貌'))}",
+                f"- 与主角关系：{stringify(role.get('与主角关系'))}",
+                f"- 公开目标：{stringify(role.get('公开目标'))}",
+                f"- 隐藏目标：{stringify(role.get('隐藏目标'))}",
+                f"- 剧情主线：{stringify(role.get('主线任务'))}",
+                f"- 当前威胁：{stringify(role.get('当前威胁'))}",
+            ]
+        )
 
-- 基础信息：{stringify(female_lead.get('表面身份'))}
-- 外观造型：{stringify(female_lead.get('固定外貌'))}
-- 性格特质：{stringify(female_lead.get('性格'))}
-- 身份设定：{stringify(female_lead.get('隐藏身份'))}
-- 技能 / 金手指：{stringify(female_lead.get('技能 / 金手指'))}
-- 情感线：{stringify(female_lead.get('情感线'))}
-- 剧情主线：{stringify(female_lead.get('主线任务'))}
-
-## {stringify(male_lead.get('姓名'), '角色 2')}
-
-- 基础信息：{stringify(male_lead.get('表面身份'))}
-- 外观造型：{stringify(male_lead.get('固定外貌'))}
-- 性格特质：{stringify(male_lead.get('性格'))}
-- 身份设定：{stringify(male_lead.get('隐藏身份'))}
-- 技能 / 金手指：{stringify(male_lead.get('技能 / 金手指'))}
-- 情感线：{stringify(male_lead.get('情感线'))}
-- 剧情主线：{stringify(male_lead.get('主线任务'))}
-"""
+    return "\n".join(lines) + "\n"
 
 
 def build_episode_synopsis(seed: dict[str, Any]) -> str:
@@ -454,7 +552,7 @@ def create_drama_project(
     write_project_file(project_dir / "narrative-style.md", build_narrative_style(seed), overwrite=overwrite)
     write_project_file(project_dir / "linenew.md", build_outline(seed), overwrite=overwrite)
     write_project_file(project_dir / "state" / "角色状态.md", build_role_state(seed), overwrite=overwrite)
-    write_project_file(project_dir / "state" / "伏笔列表.md", build_hooks_template(), overwrite=overwrite)
+    write_project_file(project_dir / "state" / "伏笔列表.md", build_hooks_template(seed), overwrite=overwrite)
     write_project_file(project_dir / "state" / "剧集历史.md", build_history_template(), overwrite=overwrite)
     write_project_file(project_dir / "task_log.md", build_task_log(project_name), overwrite=overwrite)
 

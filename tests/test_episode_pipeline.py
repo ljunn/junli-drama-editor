@@ -84,7 +84,11 @@ class EpisodePipelineCliTests(unittest.TestCase):
 
             compose_result = self.run_cli(PIPELINE, "compose-scenes", project_dir, "--episode-num", "1")
             self.assertEqual(compose_result.returncode, 0, self.combined_output(compose_result))
-            self.assertTrue((project_dir / "runtime" / "episode-0001" / "scene-01" / "scene.prompt.md").exists())
+            prompt_path = project_dir / "runtime" / "episode-0001" / "scene-01" / "scene.prompt.md"
+            self.assertTrue(prompt_path.exists())
+            prompt_text = prompt_path.read_text(encoding="utf-8")
+            self.assertIn("## Few-shot 对照", prompt_text)
+            self.assertIn("软卡点 vs 狠卡点", prompt_text)
 
     def test_force_seed_can_upgrade_existing_skeleton(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -137,6 +141,112 @@ class EpisodePipelineCliTests(unittest.TestCase):
             self.assertNotEqual(finish_result.returncode, 0)
             self.assertIn("Finish 终止", finish_result.stdout)
             self.assertFalse((project_dir / "episodes" / "episode-0001.md").exists())
+
+    def test_plan_blocks_episode_two_when_context_is_thin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "续写项目"
+            init_result = self.run_cli(
+                PIPELINE,
+                "init-project",
+                "续写项目",
+                "--path",
+                tmp,
+                "--seed-file",
+                EXAMPLE_SEED,
+            )
+            self.assertEqual(init_result.returncode, 0, self.combined_output(init_result))
+
+            plan_result = self.run_cli(PIPELINE, "plan", project_dir, "--episode-num", "2")
+            self.assertNotEqual(plan_result.returncode, 0)
+            self.assertIn("未找到第1集剧本文件", plan_result.stdout)
+            self.assertIn("state/剧集历史.md 还没有第1集记录", plan_result.stdout)
+
+    def test_finish_blocks_structurally_valid_but_thin_script_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "质量门项目"
+            init_result = self.run_cli(
+                PIPELINE,
+                "init-project",
+                "质量门项目",
+                "--path",
+                tmp,
+                "--seed-file",
+                EXAMPLE_SEED,
+            )
+            self.assertEqual(init_result.returncode, 0, self.combined_output(init_result))
+
+            thin_script = Path(tmp) / "thin-script.md"
+            thin_script.write_text(
+                "\n".join(
+                    [
+                        "场景1: 顾家宴会厅(0-20秒)",
+                        "【环境空镜2s】宾客围观。",
+                        "(主体)顾晚昭白衬衫黑西裙，站在手镯展台前。",
+                        "(动作)她抬手按住裂开的手镯。",
+                        "(光影)冷白灯压住她的脸。",
+                        "(镜头)近景推进到手镯裂口。",
+                        "(画质)4K。",
+                        "台词:",
+                        "顾晚昭:\"别碰。\"",
+                        "场景2: 顾家走廊(20-40秒)",
+                        "【环境空镜2s】走廊很静。",
+                        "(主体)裴砚川深灰西装，停在拐角。",
+                        "(动作)他拦住顾晚昭的去路。",
+                        "(光影)侧光切脸。",
+                        "(镜头)双人对切。",
+                        "(画质)4K。",
+                        "台词:",
+                        "裴砚川:\"等等。\"",
+                        "场景3: 监控死角(40-60秒)",
+                        "【环境空镜2s】红点闪一下。",
+                        "(主体)顾晚昭压低声音。",
+                        "(动作)她把录音笔藏回袖口。",
+                        "(光影)背景压暗。",
+                        "(镜头)手部特写。",
+                        "(画质)4K。",
+                        "台词:",
+                        "顾晚昭:\"你看错了。\"",
+                        "场景4: 顾家露台(60-80秒)",
+                        "【环境空镜2s】风吹窗帘。",
+                        "(主体)顾清漪倚在栏杆旁。",
+                        "(动作)她盯着顾晚昭冷笑。",
+                        "(光影)逆光勾边。",
+                        "(镜头)压脸近景。",
+                        "(画质)4K。",
+                        "台词:",
+                        "顾清漪:\"你输了。\"",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            finish_result = self.run_cli(
+                PIPELINE,
+                "finish",
+                project_dir,
+                "1",
+                thin_script,
+                "--summary",
+                "测试摘要",
+            )
+            self.assertNotEqual(finish_result.returncode, 0)
+            self.assertIn("结构虽然过关", finish_result.stdout)
+            self.assertIn("有效对白偏少", finish_result.stdout)
+            self.assertFalse((project_dir / "episodes" / "episode-0001.md").exists())
+
+            override_result = self.run_cli(
+                PIPELINE,
+                "finish",
+                project_dir,
+                "1",
+                thin_script,
+                "--summary",
+                "测试摘要",
+                "--allow-quality-warnings",
+            )
+            self.assertEqual(override_result.returncode, 0, self.combined_output(override_result))
+            self.assertTrue((project_dir / "episodes" / "episode-0001.md").exists())
 
 
 if __name__ == "__main__":
