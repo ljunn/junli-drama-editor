@@ -16,6 +16,7 @@
 - 生成可直接喂给 AI 的单集创作包
 - 生成单场 / 单镜头 Prompt Pack，适配 5 秒视频工具
 - 检查剧本是否小说化、格式是否合规
+- 检查知情越权、伏笔断裂和分集梗概偏航风险
 - 回写剧集历史、角色状态和伏笔状态
 
 ## 安装成 Skill
@@ -63,8 +64,14 @@ python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数
 # 结构化质检
 python3 scripts/episode_pipeline.py review <剧本文件路径>
 
+# 结合项目上下文做一致性检查
+python3 scripts/episode_pipeline.py consistency-check <项目目录> --episode-num <集数> --script-path <剧本文件路径>
+
 # 完成后回写状态
 python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件路径> --summary "本集摘要"
+
+# 确认/编辑 diff 后，应用回 Markdown 状态表
+python3 scripts/episode_pipeline.py apply-state-diff <项目目录> --episode-num <集数>
 ```
 
 不传 `--scene-num` 或 `--shot-num` 时，命令也只会生成“下一个缺失项”各 1 个 prompt，不会批量生成。
@@ -97,8 +104,8 @@ python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件
 3. 开写新一集前，先做 `preflight` 和 `resume`。
 4. 如果下游工具只能吃 5 秒镜头，默认走 `compose-scenes -> compose-shots`，每次只生成一个镜头；`scene.md` 只保留场景摘要和镜头表，不再写成长场景正文，镜头表不是严格 5 秒时，`compose-shots` 会直接报错。
 5. Prompt Pack 现在会自动注入 `references/good-vs-bad-examples.md` 和 `references/repair-strategies.md` 的关键 few-shot 对照，别再只靠抽象规则硬写。
-6. 交付正文前，先做 `review`，再结合 `references/quality-checklist.md` 人工复核。
-7. `finish` 会再次执行结构检查；严重质量警告也会阻断回写。只有你明确接受风险时，才用 `--allow-quality-warnings` 强制归档。
+6. 交付正文前，先做 `review`；如果要看知情越权、活跃伏笔是否写丢、和分集梗概是否跑偏，再补 `consistency-check`。
+7. `finish` 会再次执行结构检查，并在 `state/pending/episode-XXXX.state-diff.json` 产出可编辑的状态 diff；确认或补完后，再用 `apply-state-diff` 把内容写回 Markdown 状态表。严重质量警告仍会阻断回写。只有你明确接受风险时，才用 `--allow-quality-warnings` 强制归档。
 
 ## 运行环境
 

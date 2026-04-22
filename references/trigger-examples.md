@@ -35,6 +35,7 @@
 默认判断：
 
 - `task=review`
+- 涉及“知情越权 / 伏笔断裂 / 梗概冲突”时，再补跑 `consistency-check`
 
 ## 恢复状态
 

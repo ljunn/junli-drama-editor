@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +80,12 @@ WORKFLOW_LAYER_CATALOG: list[dict[str, Any]] = [
         "summary": "检查字数、场景块、格式和小说化风险；不替代人工爽点/卡点复核。",
     },
     {
+        "id": "consistency-check",
+        "title": "项目上下文一致性检查",
+        "steps": ["consistency-check"],
+        "summary": "结合状态文件、分集梗概、上一集和当前剧本，提示知情越权、伏笔断裂和剧情偏航风险。",
+    },
+    {
         "id": "compose-scenes",
         "title": "分场创作包",
         "steps": ["compose-scenes", "compose-shots", "stitch-scenes"],
@@ -86,8 +94,8 @@ WORKFLOW_LAYER_CATALOG: list[dict[str, Any]] = [
     {
         "id": "finish",
         "title": "完结回写",
-        "steps": ["finish"],
-        "summary": "回写最近完成集、剧集历史，并生成状态文件待确认回写提醒。",
+        "steps": ["finish", "apply-state-diff"],
+        "summary": "回写最近完成集、剧集历史，生成 state diff，并可把确认后的 diff 应用回 Markdown 状态表。",
     },
 ]
 
@@ -95,7 +103,7 @@ COMMAND_LAYER_CATALOG: list[dict[str, Any]] = [
     {"group": "Layer", "commands": ["rules", "workflows", "commands"]},
     {
         "group": "Workflow",
-        "commands": ["init-project", "next-episode", "compose-scenes", "compose-shots", "review", "finish"],
+        "commands": ["init-project", "next-episode", "compose-scenes", "compose-shots", "review", "consistency-check", "finish", "apply-state-diff"],
     },
     {
         "group": "Primitive",
@@ -109,7 +117,9 @@ COMMAND_LAYER_CATALOG: list[dict[str, Any]] = [
             "compose-shots",
             "stitch-scenes",
             "check",
+            "consistency-check",
             "finish",
+            "apply-state-diff",
         ],
     },
 ]
@@ -144,6 +154,44 @@ MIN_EFFECTIVE_SCRIPT_CHARS = 1200
 MIN_DIALOGUE_LINES_PER_SCENE = 3
 MIN_DIALOGUE_LINES_TOTAL = 12
 FINISH_BLOCKING_RISK_WORD_THRESHOLD = 3
+SIGNIFICANT_TERM_STOPWORDS = {
+    "当前",
+    "状态",
+    "角色",
+    "知道",
+    "知道什么",
+    "绝对不知道什么",
+    "当前已知信息",
+    "当前服装",
+    "造型",
+    "当前状态",
+    "备注",
+    "核心秘密",
+    "任务",
+    "主线任务",
+    "公开目标",
+    "隐藏目标",
+    "表面身份",
+    "隐藏身份",
+    "剧情",
+    "剧本",
+    "场景",
+    "第",
+    "集",
+    "起因",
+    "经过",
+    "结果",
+    "卡点",
+    "摘要",
+    "最新",
+    "完成",
+    "处理",
+    "内容",
+    "信息",
+    "目标",
+    "计划",
+    "线索",
+}
 
 DIALOGUE_LINE_PATTERN = re.compile(
     r"(?m)^(?!场景\d+[:：])(?!台词[:：])(?![【(（\-#])[^:\n：]{1,20}[:：]\s*(?!$)"
@@ -156,6 +204,16 @@ def read_text(path: Path) -> str:
 
 def normalize_value(value: str) -> str:
     return re.sub(r"\s+", "", value or "")
+
+
+def stringify_value(value: Any, default: str = "") -> str:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):
+        return str(value)
+    return default
 
 
 def is_placeholder_value(value: str, extra_placeholders: tuple[str, ...] = ()) -> bool:
@@ -231,6 +289,16 @@ def extract_task_field(text: str, label: str, default: str = "无") -> str:
     return match.group(1).strip() if match else default
 
 
+def extract_bullet_mapping(text: str) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for line in text.splitlines():
+        match = re.match(r"^\s*-\s*([^:：]+)[:：]\s*(.*)$", line)
+        if not match:
+            continue
+        mapping[match.group(1).strip()] = match.group(2).strip()
+    return mapping
+
+
 def replace_task_field(text: str, label: str, value: str) -> str:
     pattern = rf"(?m)^- {re.escape(label)}：.*$"
     replacement = f"- {label}：{value}"
@@ -246,6 +314,21 @@ def replace_section(text: str, header: str, body_lines: list[str]) -> str:
     if match:
         return text[: match.start(2)] + body + text[match.end(2) :]
     return text.rstrip() + f"\n\n## {header}\n" + body
+
+
+def is_markdown_divider_cells(cells: tuple[str, ...] | list[str]) -> bool:
+    normalized = [cell.replace(" ", "") for cell in cells]
+    return bool(normalized) and all(cell and set(cell) <= {"-", ":"} for cell in normalized)
+
+
+def backup_file(path: Path) -> Path:
+    backup_path = path.with_suffix(path.suffix + ".bak")
+    counter = 1
+    while backup_path.exists():
+        backup_path = path.with_suffix(path.suffix + f".bak{counter}")
+        counter += 1
+    backup_path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    return backup_path
 
 
 def find_missing_files(project_dir: Path) -> list[str]:
@@ -792,9 +875,651 @@ def parse_markdown_table_rows(text: str, header_patterns: tuple[str, ...]) -> li
                 break
             continue
         cells = tuple(cell.strip() for cell in stripped.strip("|").split("|"))
+        if is_markdown_divider_cells(cells):
+            continue
         if cells:
             rows.append(cells)
     return rows
+
+
+def unique_preserving_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def extract_role_state_current_states(role_state_text: str) -> dict[str, str]:
+    return extract_bullet_mapping(extract_section(role_state_text, "当前集后状态"))
+
+
+def extract_role_state_wardrobe(role_state_text: str) -> dict[str, str]:
+    return extract_bullet_mapping(extract_section(role_state_text, "当前服装与造型"))
+
+
+def extract_role_state_knowledge_rows(role_state_text: str) -> list[dict[str, str]]:
+    section = extract_section(role_state_text, "知情状态表")
+    rows = parse_markdown_table_rows(section, header_patterns=("| 角色 |",))
+    parsed_rows: list[dict[str, str]] = []
+    for cells in rows:
+        if len(cells) < 4 or is_placeholder_value(cells[0], ("暂无", "无", "未记录")):
+            continue
+        parsed_rows.append(
+            {
+                "role": cells[0],
+                "known": cells[1],
+                "unknown": cells[2],
+                "note": cells[3],
+            }
+        )
+    return parsed_rows
+
+
+def extract_active_hook_rows(hook_text: str) -> list[dict[str, str]]:
+    section = extract_section(hook_text, "活跃伏笔")
+    rows = parse_markdown_table_rows(section, header_patterns=("| 伏笔名称 |",))
+    parsed_rows: list[dict[str, str]] = []
+    for cells in rows:
+        if len(cells) < 4 or is_placeholder_value(cells[0], ("暂无", "无", "未记录")):
+            continue
+        parsed_rows.append(
+            {
+                "name": cells[0],
+                "status": cells[1],
+                "first_appearance": cells[2],
+                "note": cells[3],
+            }
+        )
+    return parsed_rows
+
+
+def extract_resolved_hook_rows(hook_text: str) -> list[dict[str, str]]:
+    section = extract_section(hook_text, "已回收伏笔")
+    rows = parse_markdown_table_rows(section, header_patterns=("| 伏笔名称 |",))
+    parsed_rows: list[dict[str, str]] = []
+    for cells in rows:
+        if len(cells) < 3 or is_placeholder_value(cells[0], ("暂无", "无", "未记录")):
+            continue
+        parsed_rows.append(
+            {
+                "name": cells[0],
+                "episode": cells[1],
+                "note": cells[2],
+            }
+        )
+    return parsed_rows
+
+
+def normalize_role_value_items(value: Any) -> list[dict[str, str]]:
+    items = value if isinstance(value, list) else []
+    normalized_items: list[dict[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        role = stringify_value(item.get("role")).strip()
+        entry_value = stringify_value(item.get("value")).strip()
+        if not role:
+            continue
+        normalized_items.append({"role": role, "value": entry_value})
+    return normalized_items
+
+
+def normalize_knowledge_rows(value: Any) -> list[dict[str, str]]:
+    items = value if isinstance(value, list) else []
+    rows: list[dict[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        role = stringify_value(item.get("role")).strip()
+        if not role:
+            continue
+        rows.append(
+            {
+                "role": role,
+                "known": stringify_value(item.get("known")).strip(),
+                "unknown": stringify_value(item.get("unknown")).strip(),
+                "note": stringify_value(item.get("note")).strip(),
+            }
+        )
+    return rows
+
+
+def normalize_active_hook_rows(value: Any) -> list[dict[str, str]]:
+    items = value if isinstance(value, list) else []
+    rows: list[dict[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = stringify_value(item.get("name")).strip()
+        if not name:
+            continue
+        rows.append(
+            {
+                "name": name,
+                "status": stringify_value(item.get("status")).strip(),
+                "first_appearance": stringify_value(item.get("first_appearance")).strip(),
+                "note": stringify_value(item.get("note")).strip(),
+            }
+        )
+    return rows
+
+
+def normalize_resolved_hook_rows(value: Any) -> list[dict[str, str]]:
+    items = value if isinstance(value, list) else []
+    rows: list[dict[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = stringify_value(item.get("name")).strip()
+        if not name:
+            continue
+        rows.append(
+            {
+                "name": name,
+                "episode": stringify_value(item.get("episode")).strip(),
+                "note": stringify_value(item.get("note")).strip(),
+            }
+        )
+    return rows
+
+
+def render_role_value_lines(items: list[dict[str, str]]) -> list[str]:
+    if not items:
+        return ["- 暂无：待确认"]
+    return [f"- {item['role']}：{item['value'] or '待确认'}" for item in items]
+
+
+def render_markdown_table_section(headers: list[str], rows: list[list[str]], empty_row: list[str] | None = None) -> list[str]:
+    header_line = "| " + " | ".join(headers) + " |"
+    divider_line = "| " + " | ".join("-" * len(header) for header in headers) + " |"
+    rendered = [header_line, divider_line]
+    if rows:
+        rendered.extend("| " + " | ".join(cell for cell in row) + " |" for row in rows)
+        return rendered
+    if empty_row:
+        rendered.append("| " + " | ".join(empty_row) + " |")
+    return rendered
+
+
+def remove_section_note(text: str, header: str, note: str, empty_placeholder: str = "- 暂无") -> str:
+    existing = extract_section(text, header)
+    lines = [line.strip() for line in existing.splitlines() if line.strip()]
+    filtered = [line for line in lines if line != note]
+    return replace_section(text, header, filtered or [empty_placeholder])
+
+
+def load_state_diff(diff_path: Path) -> dict[str, Any]:
+    if not diff_path.exists():
+        raise FileNotFoundError(f"state diff 不存在：{diff_path}")
+    try:
+        payload = json.loads(diff_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"state diff 不是合法 JSON：{diff_path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("state diff 根节点必须是 JSON object。")
+    return payload
+
+
+def collect_known_character_names(project_dir: Path) -> list[str]:
+    names: list[str] = []
+    character_text = read_text(project_dir / "character-design.md")
+    for section_name in ("女主", "男主"):
+        section_text = extract_section(character_text, section_name)
+        name = extract_labeled_value(section_text, "姓名")
+        if not is_placeholder_value(name):
+            names.append(name)
+    for title, body in supporting_role_cards(character_text):
+        role_name = extract_labeled_value(body, "姓名", title)
+        if not is_placeholder_value(role_name):
+            names.append(role_name)
+
+    role_state_text = read_text(project_dir / "state" / "角色状态.md")
+    names.extend(extract_role_state_current_states(role_state_text).keys())
+    names.extend(row["role"] for row in extract_role_state_knowledge_rows(role_state_text))
+    return unique_preserving_order([name for name in names if not is_placeholder_value(name, ("女主", "男主"))])
+
+
+def collect_script_speakers(script_text: str) -> list[str]:
+    speakers: list[str] = []
+    for line in script_text.splitlines():
+        match = re.match(r"^\s*([^:\n：]{1,20})[:：]\s*(.+)$", line)
+        if not match:
+            continue
+        speaker = match.group(1).strip().strip("\"' ")
+        if speaker == "台词" or speaker.startswith("场景"):
+            continue
+        if speaker.startswith(("【", "(", "（", "#", "-")):
+            continue
+        speakers.append(speaker)
+    return unique_preserving_order(speakers)
+
+
+def collect_role_context_lines(script_text: str, role_names: list[str]) -> dict[str, list[str]]:
+    contexts = {role_name: [] for role_name in role_names}
+    for line in script_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        speaker_match = re.match(r"^\s*([^:\n：]{1,20})[:：]\s*(.+)$", stripped)
+        if speaker_match:
+            speaker = speaker_match.group(1).strip().strip("\"' ")
+            if speaker in contexts:
+                contexts[speaker].append(stripped)
+        for role_name in role_names:
+            if role_name in stripped and stripped not in contexts[role_name]:
+                contexts[role_name].append(stripped)
+    return contexts
+
+
+def extract_significant_terms(text: str) -> list[str]:
+    normalized = re.sub(r"[^\w\u4e00-\u9fff]+", " ", text)
+    raw_parts = re.split(
+        r"\s+|知道什么|绝对不知道什么|当前已知信息|当前服装/造型|当前服装与造型|当前状态|以及|还有|并且|或者|但是|如果|因为|所以|已经|当前|真正|只是|仍然|同时|然后|这个|那个|一个|一些|不会|不能|不要|需要|应该|正在|可能|自己|他们|她们|你们|我们|是|的|了|着|和|与|及|并|在|对|从|将|把|被|让|给",
+        normalized,
+    )
+
+    terms: list[str] = []
+    for raw_part in raw_parts:
+        candidate = raw_part.strip()
+        if len(candidate) < 2:
+            continue
+        if candidate.isdigit():
+            continue
+        if candidate in SIGNIFICANT_TERM_STOPWORDS:
+            continue
+        if len(candidate) > 12:
+            terms.extend(
+                piece
+                for piece in re.findall(r"[\u4e00-\u9fff]{2,6}|[A-Za-z0-9_-]{2,}", candidate)
+                if piece not in SIGNIFICANT_TERM_STOPWORDS
+            )
+            continue
+        terms.append(candidate)
+    return unique_preserving_order(terms)
+
+
+def build_script_consistency_signals(
+    script_text: str,
+    *,
+    title: str,
+    core_event: str,
+    synopsis_text: str,
+    role_state_text: str,
+    hook_text: str,
+    known_character_names: list[str],
+) -> tuple[list[str], dict[str, Any]]:
+    warnings: list[str] = []
+    knowledge_rows = extract_role_state_knowledge_rows(role_state_text)
+    active_hook_rows = extract_active_hook_rows(hook_text)
+    active_hook_names = [row["name"] for row in active_hook_rows]
+    speakers = collect_script_speakers(script_text)
+    unknown_speakers = [speaker for speaker in speakers if speaker not in known_character_names]
+    if unknown_speakers:
+        warnings.append(f"剧本里出现未登记说话角色：{', '.join(unknown_speakers)}。")
+
+    role_contexts = collect_role_context_lines(script_text, known_character_names)
+    knowledge_risks: list[dict[str, Any]] = []
+    for row in knowledge_rows:
+        role_name = row["role"]
+        unknown_text = row["unknown"]
+        if is_placeholder_value(unknown_text, ("无", "暂无", "未记录")):
+            continue
+        role_context = "\n".join(role_contexts.get(role_name, []))
+        if not role_context:
+            continue
+        matched_terms = [term for term in extract_significant_terms(unknown_text) if term in role_context]
+        phrase_risk = len(unknown_text) >= 6 and unknown_text in role_context
+        if phrase_risk or len(set(matched_terms)) >= 2:
+            matched = unique_preserving_order(matched_terms)
+            knowledge_risks.append(
+                {
+                    "role": role_name,
+                    "unknown": unknown_text,
+                    "matched_terms": matched,
+                }
+            )
+
+    if knowledge_risks:
+        for item in knowledge_risks:
+            match_summary = f"；命中词：{', '.join(item['matched_terms'])}" if item["matched_terms"] else ""
+            warnings.append(
+                f"知情越权风险：{item['role']} 在剧本里触及其“绝对不知道什么”里的内容：{item['unknown']}{match_summary}。"
+            )
+
+    mentioned_hooks = [hook_name for hook_name in active_hook_names if hook_name and hook_name in script_text]
+    if active_hook_names and not mentioned_hooks:
+        warnings.append("当前剧本没有直接提到任何活跃伏笔名称，注意检查是否把长期钩子写丢了。")
+
+    target_terms = extract_significant_terms(" ".join(item for item in [title, core_event, synopsis_text] if item))
+    matched_target_terms = [term for term in target_terms if term in script_text]
+    if target_terms and len(set(matched_target_terms)) < min(2, len(set(target_terms))):
+        warnings.append("当前剧本与本集标题 / 核心事件 / 分集梗概的显式重合很低，注意检查是否已经偏离本集目标。")
+
+    mentioned_roles = [role_name for role_name in known_character_names if role_name in script_text]
+
+    return warnings, {
+        "scene_headers": [header for header, _ in split_scene_blocks(script_text)],
+        "speakers": speakers,
+        "unknown_speakers": unknown_speakers,
+        "mentioned_roles": mentioned_roles,
+        "active_hook_names": active_hook_names,
+        "mentioned_active_hooks": mentioned_hooks,
+        "target_terms": target_terms,
+        "matched_target_terms": unique_preserving_order(matched_target_terms),
+        "knowledge_risks": knowledge_risks,
+    }
+
+
+def build_consistency_report(
+    project_dir: Path,
+    episode_num: int,
+    title: str,
+    core_event: str,
+    *,
+    script_text: str = "",
+) -> dict[str, Any]:
+    blockers, warnings = collect_episode_context_issues(
+        project_dir,
+        episode_num,
+        title,
+        core_event,
+        require_plan=False,
+    )
+
+    role_state_text = read_text(project_dir / "state" / "角色状态.md")
+    hook_text = read_text(project_dir / "state" / "伏笔列表.md")
+    synopsis_text = extract_episode_synopsis(project_dir, episode_num)
+    known_character_names = collect_known_character_names(project_dir)
+
+    script_warnings: list[str] = []
+    script_signals: dict[str, Any] = {
+        "scene_headers": [],
+        "speakers": [],
+        "unknown_speakers": [],
+        "mentioned_roles": [],
+        "active_hook_names": [row["name"] for row in extract_active_hook_rows(hook_text)],
+        "mentioned_active_hooks": [],
+        "target_terms": [],
+        "matched_target_terms": [],
+        "knowledge_risks": [],
+    }
+    if script_text:
+        script_warnings, script_signals = build_script_consistency_signals(
+            script_text,
+            title=title,
+            core_event=core_event,
+            synopsis_text=synopsis_text,
+            role_state_text=role_state_text,
+            hook_text=hook_text,
+            known_character_names=known_character_names,
+        )
+
+    return {
+        "episode_num": episode_num,
+        "title": title,
+        "core_event": core_event,
+        "errors": blockers,
+        "warnings": [*warnings, *script_warnings],
+        "context": {
+            "known_characters": known_character_names,
+            "active_hooks": extract_active_hook_rows(hook_text),
+            "knowledge_rows": extract_role_state_knowledge_rows(role_state_text),
+            "synopsis_excerpt": synopsis_text,
+        },
+        "script_signals": script_signals,
+    }
+
+
+def print_consistency_report(
+    project_dir: Path,
+    script_path: Path | None,
+    report: dict[str, Any],
+) -> None:
+    print(f"检查项目：{project_dir}")
+    print(f"- 当前集：第{report['episode_num']}集《{report['title']}》")
+    if report["core_event"]:
+        print(f"- 核心事件：{report['core_event']}")
+    if script_path:
+        print(f"- 剧本文件：{script_path}")
+
+    known_characters = report["context"]["known_characters"]
+    if known_characters:
+        print(f"- 已登记角色：{', '.join(known_characters)}")
+
+    active_hook_names = [row["name"] for row in report["context"]["active_hooks"]]
+    if active_hook_names:
+        print(f"- 活跃伏笔：{', '.join(active_hook_names)}")
+
+    speakers = report["script_signals"]["speakers"]
+    if speakers:
+        print(f"- 剧本说话角色：{', '.join(speakers)}")
+
+    mentioned_hooks = report["script_signals"]["mentioned_active_hooks"]
+    if mentioned_hooks:
+        print(f"- 剧本命中的活跃伏笔：{', '.join(mentioned_hooks)}")
+
+    if report["errors"]:
+        print("\n错误：")
+        for item in report["errors"]:
+            print(f"- {item}")
+    if report["warnings"]:
+        print("\n警告：")
+        for item in report["warnings"]:
+            print(f"- {item}")
+
+    if not report["errors"] and not report["warnings"]:
+        print("\n检查通过。")
+
+
+def build_state_diff_payload(
+    project_dir: Path,
+    episode_num: int,
+    archived_script_path: Path,
+    *,
+    title: str,
+    core_event: str,
+    summary: str,
+    quality_report: dict[str, Any],
+    consistency_report: dict[str, Any],
+) -> dict[str, Any]:
+    task_log = read_text(project_dir / "task_log.md")
+    next_title, next_core_event = lookup_episode_outline(project_dir, episode_num + 1)
+    next_target = ""
+    if next_title:
+        next_target = f"第{episode_num + 1}集《{next_title}》"
+        if next_core_event:
+            next_target += f" / {next_core_event}"
+
+    role_state_note = f"- 第{episode_num}集《{title}》：根据已交付剧本确认角色知情、关系与造型变化。摘要：{summary}"
+    hook_state_note = f"- 第{episode_num}集《{title}》：根据已交付剧本确认伏笔新增、推进或回收。摘要：{summary}"
+    active_hook_names = [row["name"] for row in consistency_report["context"]["active_hooks"]]
+    mentioned_active_hooks = consistency_report["script_signals"]["mentioned_active_hooks"]
+    manual_review_items = [
+        "核对知情越权风险，确认是否真有角色说出了不该知道的信息。",
+        "根据剧本实际结果，手动更新 `state/角色状态.md` 的知情、关系与造型字段。",
+        "根据剧本实际结果，手动更新 `state/伏笔列表.md` 的新增 / 推进 / 回收状态。",
+    ]
+    if active_hook_names:
+        if mentioned_active_hooks:
+            manual_review_items.append(f"优先复核这些已命中的活跃伏笔：{', '.join(mentioned_active_hooks)}。")
+        else:
+            manual_review_items.append("本集没有直接命中活跃伏笔名称，确认是否存在隐性推进或遗漏回收。")
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "episode_num": episode_num,
+        "title": title,
+        "core_event": core_event,
+        "summary": summary,
+        "archived_script": str(archived_script_path.relative_to(project_dir)),
+        "script_signals": {
+            "scene_headers": consistency_report["script_signals"]["scene_headers"],
+            "speakers": consistency_report["script_signals"]["speakers"],
+            "mentioned_roles": consistency_report["script_signals"]["mentioned_roles"],
+            "active_hook_names": active_hook_names,
+            "mentioned_active_hooks": mentioned_active_hooks,
+            "unknown_speakers": consistency_report["script_signals"]["unknown_speakers"],
+            "knowledge_risks": consistency_report["script_signals"]["knowledge_risks"],
+            "quality": {
+                "effective_chars": quality_report["effective_chars"],
+                "scene_count": len(quality_report["scene_blocks"]),
+                "total_dialogue_lines": quality_report["total_dialogue_lines"],
+                "dialogue_counts": quality_report["dialogue_counts"],
+                "risk_word_counts": quality_report["risk_word_counts"],
+            },
+        },
+        "consistency_report": {
+            "errors": consistency_report["errors"],
+            "warnings": consistency_report["warnings"],
+        },
+        "proposed_updates": {
+            "task_log": {
+                "创作阶段": f"已完成第{episode_num}集",
+                "最新完成集": f"第{episode_num}集《{title}》",
+                "当前处理集": "无",
+                "最近交付文件": archived_script_path.name,
+                "下一集目标": next_target or extract_task_field(task_log, "下一集目标"),
+            },
+            "history_row": {
+                "episode": episode_num,
+                "title": title,
+                "status": "已完成",
+                "core_event": core_event or "待补充",
+                "summary": summary,
+            },
+            "pending_notes": {
+                "role_state": role_state_note,
+                "hook_state": hook_state_note,
+            },
+        },
+        "editable_updates": {
+            "role_state": {
+                "current_states": [
+                    {"role": role, "value": value}
+                    for role, value in extract_role_state_current_states(read_text(project_dir / "state" / "角色状态.md")).items()
+                ],
+                "knowledge_rows": extract_role_state_knowledge_rows(read_text(project_dir / "state" / "角色状态.md")),
+                "wardrobe": [
+                    {"role": role, "value": value}
+                    for role, value in extract_role_state_wardrobe(read_text(project_dir / "state" / "角色状态.md")).items()
+                ],
+            },
+            "hook_state": {
+                "active_hooks": extract_active_hook_rows(read_text(project_dir / "state" / "伏笔列表.md")),
+                "resolved_hooks": extract_resolved_hook_rows(read_text(project_dir / "state" / "伏笔列表.md")),
+            },
+            "pending_notes": {
+                "remove_role_state_note": True,
+                "remove_hook_state_note": True,
+            },
+        },
+        "manual_review": {
+            "checklist": manual_review_items,
+        },
+    }
+
+
+def state_diff_output_path(project_dir: Path, episode_num: int) -> Path:
+    return project_dir / "state" / "pending" / f"episode-{episode_num:04d}.state-diff.json"
+
+
+def write_state_diff(project_dir: Path, episode_num: int, payload: dict[str, Any]) -> Path:
+    output_path = state_diff_output_path(project_dir, episode_num)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return output_path
+
+
+def command_apply_state_diff(args: argparse.Namespace) -> int:
+    project_dir = ensure_project_dir(Path(args.project_dir))
+    diff_path = Path(args.diff_file).resolve() if args.diff_file else state_diff_output_path(project_dir, args.episode_num)
+    try:
+        payload = load_state_diff(diff_path)
+    except (FileNotFoundError, ValueError) as exc:
+        print(str(exc))
+        return 1
+
+    if int(payload.get("episode_num", 0)) != args.episode_num:
+        print(f"Apply-state-diff 失败：diff 集数与命令参数不一致。diff={payload.get('episode_num')}，命令={args.episode_num}")
+        return 1
+
+    editable_updates = payload.get("editable_updates")
+    proposed_updates = payload.get("proposed_updates")
+    if not isinstance(editable_updates, dict) or not isinstance(proposed_updates, dict):
+        print("Apply-state-diff 失败：diff 缺少 `editable_updates` 或 `proposed_updates`。")
+        return 1
+
+    role_state_updates = editable_updates.get("role_state") if isinstance(editable_updates.get("role_state"), dict) else {}
+    hook_state_updates = editable_updates.get("hook_state") if isinstance(editable_updates.get("hook_state"), dict) else {}
+    pending_notes_updates = editable_updates.get("pending_notes") if isinstance(editable_updates.get("pending_notes"), dict) else {}
+    pending_notes = proposed_updates.get("pending_notes") if isinstance(proposed_updates.get("pending_notes"), dict) else {}
+
+    role_state_path = project_dir / "state" / "角色状态.md"
+    hook_state_path = project_dir / "state" / "伏笔列表.md"
+    if not role_state_path.exists() or not hook_state_path.exists():
+        print("Apply-state-diff 失败：缺少状态文件。")
+        return 1
+
+    role_state_text = read_text(role_state_path)
+    hook_state_text = read_text(hook_state_path)
+
+    current_state_items = normalize_role_value_items(role_state_updates.get("current_states"))
+    knowledge_rows = normalize_knowledge_rows(role_state_updates.get("knowledge_rows"))
+    wardrobe_items = normalize_role_value_items(role_state_updates.get("wardrobe"))
+    active_hook_rows = normalize_active_hook_rows(hook_state_updates.get("active_hooks"))
+    resolved_hook_rows = normalize_resolved_hook_rows(hook_state_updates.get("resolved_hooks"))
+
+    role_state_text = replace_section(role_state_text, "当前集后状态", render_role_value_lines(current_state_items))
+    role_state_text = replace_section(
+        role_state_text,
+        "知情状态表",
+        render_markdown_table_section(
+            ["角色", "知道什么", "绝对不知道什么", "备注"],
+            [[row["role"], row["known"], row["unknown"], row["note"]] for row in knowledge_rows],
+            empty_row=["", "", "", ""],
+        ),
+    )
+    role_state_text = replace_section(role_state_text, "当前服装与造型", render_role_value_lines(wardrobe_items))
+
+    hook_state_text = replace_section(
+        hook_state_text,
+        "活跃伏笔",
+        render_markdown_table_section(
+            ["伏笔名称", "当前状态", "首次出现", "备注"],
+            [[row["name"], row["status"], row["first_appearance"], row["note"]] for row in active_hook_rows],
+        ),
+    )
+    hook_state_text = replace_section(
+        hook_state_text,
+        "已回收伏笔",
+        render_markdown_table_section(
+            ["伏笔名称", "回收集数", "备注"],
+            [[row["name"], row["episode"], row["note"]] for row in resolved_hook_rows],
+        ),
+    )
+
+    if pending_notes_updates.get("remove_role_state_note") and pending_notes.get("role_state"):
+        role_state_text = remove_section_note(role_state_text, "待确认回写", stringify_value(pending_notes.get("role_state")))
+    if pending_notes_updates.get("remove_hook_state_note") and pending_notes.get("hook_state"):
+        hook_state_text = remove_section_note(hook_state_text, "待确认回写", stringify_value(pending_notes.get("hook_state")))
+
+    role_state_backup = backup_file(role_state_path)
+    hook_state_backup = backup_file(hook_state_path)
+    role_state_path.write_text(role_state_text, encoding="utf-8")
+    hook_state_path.write_text(hook_state_text, encoding="utf-8")
+
+    print("已应用 state diff：")
+    print(f"- diff：{diff_path}")
+    print(f"- {role_state_path}")
+    print(f"- {hook_state_path}")
+    print("已备份：")
+    print(f"- {role_state_backup}")
+    print(f"- {hook_state_backup}")
+    return 0
 
 
 def extract_shot_table_section(text: str) -> str:
@@ -2237,6 +2962,28 @@ def command_check(args: argparse.Namespace) -> int:
     return 1 if report["errors"] else 0
 
 
+def command_consistency_check(args: argparse.Namespace) -> int:
+    project_dir = ensure_project_dir(Path(args.project_dir))
+    title, core_event = resolve_episode_meta(project_dir, args.episode_num, args.title, args.core_event)
+    script_path = Path(args.script_path).resolve() if args.script_path else find_episode_script(project_dir, args.episode_num)
+    script_text = ""
+    if script_path:
+        if not script_path.exists():
+            print(f"剧本文件不存在：{script_path}")
+            return 1
+        script_text = read_text(script_path)
+
+    report = build_consistency_report(
+        project_dir,
+        args.episode_num,
+        title,
+        core_event,
+        script_text=script_text,
+    )
+    print_consistency_report(project_dir, script_path, report)
+    return 1 if report["errors"] else 0
+
+
 def upsert_history_row(
     text: str,
     episode_num: int,
@@ -2281,7 +3028,8 @@ def command_finish(args: argparse.Namespace) -> int:
     if not script_path.exists():
         print(f"剧本文件不存在：{script_path}")
         return 1
-    report = analyze_script_quality(read_text(script_path), args.max_chars)
+    script_text = read_text(script_path)
+    report = analyze_script_quality(script_text, args.max_chars)
     print_script_quality_report(script_path, report)
     if report["errors"]:
         print("\nFinish 终止：请先修复 `check/review` 的错误项，再回写状态。")
@@ -2296,6 +3044,13 @@ def command_finish(args: argparse.Namespace) -> int:
     archived_script_path = persist_episode_script(project_dir, args.episode_num, script_path)
 
     title, core_event = resolve_episode_meta(project_dir, args.episode_num, args.title, args.core_event)
+    consistency_report = build_consistency_report(
+        project_dir,
+        args.episode_num,
+        title,
+        core_event,
+        script_text=script_text,
+    )
 
     task_log_path = project_dir / "task_log.md"
     task_log = read_text(task_log_path)
@@ -2329,12 +3084,32 @@ def command_finish(args: argparse.Namespace) -> int:
     hook_state_text = prepend_section_note(hook_state_text, "待确认回写", hook_state_note)
     hook_state_path.write_text(hook_state_text, encoding="utf-8")
 
+    state_diff_path = write_state_diff(
+        project_dir,
+        args.episode_num,
+        build_state_diff_payload(
+            project_dir,
+            args.episode_num,
+            archived_script_path,
+            title=title,
+            core_event=core_event,
+            summary=args.summary,
+            quality_report=report,
+            consistency_report=consistency_report,
+        ),
+    )
+
     print("已更新：")
     print(f"- 归档剧本：{archived_script_path}")
     print(f"- {task_log_path}")
     print(f"- {history_path}")
     print(f"- {role_state_path}")
     print(f"- {hook_state_path}")
+    print(f"- {state_diff_path}")
+    if consistency_report["warnings"]:
+        print("\n一致性提醒：")
+        for item in consistency_report["warnings"]:
+            print(f"- {item}")
     return 0
 
 
@@ -2456,6 +3231,18 @@ def build_parser() -> argparse.ArgumentParser:
     review_parser.add_argument("script_path")
     review_parser.add_argument("--max-chars", type=int, default=3000)
 
+    consistency_parser = subparsers.add_parser("consistency-check")
+    consistency_parser.add_argument("project_dir")
+    consistency_parser.add_argument("--episode-num", type=int, required=True)
+    consistency_parser.add_argument("--script-path")
+    consistency_parser.add_argument("--title")
+    consistency_parser.add_argument("--core-event")
+
+    apply_state_diff_parser = subparsers.add_parser("apply-state-diff")
+    apply_state_diff_parser.add_argument("project_dir")
+    apply_state_diff_parser.add_argument("--episode-num", type=int, required=True)
+    apply_state_diff_parser.add_argument("--diff-file")
+
     finish_parser = subparsers.add_parser("finish")
     finish_parser.add_argument("project_dir")
     finish_parser.add_argument("episode_num", type=int)
@@ -2510,6 +3297,10 @@ def main() -> int:
         return command_next_episode(args)
     if args.command in {"check", "review"}:
         return command_check(args)
+    if args.command == "consistency-check":
+        return command_consistency_check(args)
+    if args.command == "apply-state-diff":
+        return command_apply_state_diff(args)
     if args.command == "finish":
         return command_finish(args)
 

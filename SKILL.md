@@ -38,6 +38,7 @@ python3 scripts/install_skill.py
 - 继续写下一集：`next-episode`
 - 生成单集创作包：`compose`
 - 单集质检：`review`
+- 单集一致性检查：`consistency-check`
 - 恢复状态 / 修记忆：`resume`
 - 投稿资料整理：读 `references/submission-package.md`
 
@@ -62,6 +63,7 @@ python3 scripts/install_skill.py
 - 提到“写第X集 / 续写 / 接着上一集” -> `task=next`
 - 提到“改对白 / 改卡点 / 压3000字 / 调节奏 / 改格式” -> `task=repair`
 - 提到“检查 / 质检 / 像不像小说” -> `task=review`
+- 提到“知情越权 / 伏笔断裂 / 梗概冲突 / 写跑偏了” -> 额外跑 `consistency-check`
 - 提到“恢复状态 / 接老项目 / 看写到哪了” -> `task=resume`
 - 提到“投稿 / 路演 / 招商 / 人物小传 / 故事大纲” -> `task=submission`
 - 提到“AI 视频版 / 喂视频模型” -> `mode=ai-video`
@@ -203,12 +205,14 @@ python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <
 ```bash
 python3 scripts/episode_pipeline.py check <剧本文件路径>
 python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件路径> --summary "本集摘要"
+python3 scripts/episode_pipeline.py apply-state-diff <项目目录> --episode-num <集数>
 ```
 
-6. `finish` 会把最终剧本自动归档到 `episodes/episode-XXXX.md`，再更新 `task_log.md`、`state/剧集历史.md`，并在 `state/角色状态.md`、`state/伏笔列表.md` 写入“待确认回写”提醒；明确的知情状态和伏笔推进仍要人工细化。
-7. 如果 `preflight` 失败，必须先补文件或替换模板占位；禁止假装已经恢复上下文。
-8. 如果用户只要求改某一集的节奏、对白、卡点或格式，默认做定向返修，不整集推倒重写。
-9. 如果用户要求的是“拍摄版”而不是“AI 视频生成版”，优先遵守拍摄版场景经济性；如果用户要求的是“AI 视频生成版”，优先遵守结构化场景块和 3000 字符控制。
+6. `finish` 会把最终剧本自动归档到 `episodes/episode-XXXX.md`，再更新 `task_log.md`、`state/剧集历史.md`，并在 `state/pending/episode-XXXX.state-diff.json` 产出可编辑的状态 diff，同时往 `state/角色状态.md`、`state/伏笔列表.md` 写入“待确认回写”提醒。
+7. 检查或补完 `state diff` 后，再跑 `apply-state-diff`，把确认后的状态写回 Markdown 表格；它会先留 `.bak` 备份，再清掉当前集的“待确认回写”提醒。
+8. 如果 `preflight` 失败，必须先补文件或替换模板占位；禁止假装已经恢复上下文。
+9. 如果用户只要求改某一集的节奏、对白、卡点或格式，默认做定向返修，不整集推倒重写。
+10. 如果用户要求的是“拍摄版”而不是“AI 视频生成版”，优先遵守拍摄版场景经济性；如果用户要求的是“AI 视频生成版”，优先遵守结构化场景块和 3000 字符控制。
 
 ## 违约信号
 
@@ -268,12 +272,14 @@ python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件
 - 压 3000 字
 - 增加爽点 / 卡点
 - 检查是否像小说
+- 检查知情越权、伏笔断裂或梗概偏离
 
 必须动作：
 - 读取目标剧本
 - 至少补读上一集或相关状态文件
 - 默认做定向返修
 - 先跑 `check`，再决定改哪些块
+- 涉及知情状态、活跃伏笔或本集目标是否跑偏时，再跑 `consistency-check`
 - 把 `check` 当结构门，不把它误当成爽点/卡点/人物一致性的全自动判官
 
 优先参考：
@@ -377,6 +383,8 @@ python3 scripts/episode_pipeline.py compose-shots <项目目录> --episode-num <
 python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py next-episode <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py check <剧本文件路径>
+python3 scripts/episode_pipeline.py consistency-check <项目目录> --episode-num <集数> --script-path <剧本文件路径>
 python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件路径> --summary "本集摘要"
+python3 scripts/episode_pipeline.py apply-state-diff <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py review <剧本文件路径>
 ```

@@ -206,12 +206,41 @@ python3 scripts/episode_pipeline.py review <剧本文件路径>
 
 它主要是结构门。爽点、卡点、人物一致性和知情状态，仍要结合 `references/quality-checklist.md` 做人工复核。
 
-### 6. 状态回写
+### 6. 项目上下文一致性检查
+
+默认入口：
+
+```bash
+python3 scripts/episode_pipeline.py consistency-check <项目目录> --episode-num <集数> --script-path <剧本文件路径>
+```
+
+它会结合：
+
+- `state/角色状态.md`
+- `state/伏笔列表.md`
+- `linenew.md`
+- `docs/分集梗概.md`
+- 当前剧本里的说话角色、角色提及和活跃伏笔命中情况
+
+主要输出：
+
+- 续写前置条件是否缺失
+- 知情越权风险提示
+- 活跃伏笔是否疑似写丢
+- 当前剧本是否明显偏离本集标题 / 核心事件 / 分集梗概
+
+注意：
+
+- 这是项目感知的一致性提示，不是绝对正确的剧情裁判
+- `review` 负责结构门，`consistency-check` 负责上下文门，二者不要混用
+
+### 7. 状态回写
 
 默认入口：
 
 ```bash
 python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件路径> --summary "本集摘要"
+python3 scripts/episode_pipeline.py apply-state-diff <项目目录> --episode-num <集数>
 ```
 
 它会更新：
@@ -221,11 +250,18 @@ python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件
 - `state/剧集历史.md`
 - `state/角色状态.md` 的“待确认回写”提醒
 - `state/伏笔列表.md` 的“待确认回写”提醒
+- `state/pending/episode-XXXX.state-diff.json` 机器可读状态 diff
 
 在真正回写前，`finish` 还会先跑一次结构检查；如果剧本仍有硬错误，会直接拒绝归档和回写。
 现在 `finish` 还会拦截“正文明显偏短 / 对白明显偏少 / 风险词过多”这类会污染后续状态的结果；如确实要带警告归档，必须显式传 `--allow-quality-warnings`。
 
-角色状态和伏笔内容是否变化，仍建议人工确认后再细化回写，以免自动误判剧情。
+推荐链路：
+
+1. 跑 `finish` 生成归档和 `state diff`
+2. 检查或编辑 `state/pending/episode-XXXX.state-diff.json`
+3. 跑 `apply-state-diff` 把确认后的内容应用回 `state/角色状态.md` 与 `state/伏笔列表.md`
+
+`apply-state-diff` 默认会先备份原始状态文件，再重写对应 Markdown 小节，并清掉当前集的“待确认回写”提醒。
 
 如果状态已经乱了，不要硬接着写，先按：
 
@@ -254,7 +290,9 @@ python3 scripts/episode_pipeline.py workflows
 - `stitch-scenes`
 - `check`
 - `review`
+- `consistency-check`
 - `finish`
+- `apply-state-diff`
 - `next-episode`
 
 查看 Command 层索引：
@@ -303,6 +341,8 @@ python3 scripts/episode_pipeline.py commands
 - 模型一次写不完整集，或下游工具只能生成 5 秒左右镜头：先用 `compose-scenes`，再用 `compose-shots`
 - 要把多个分场结果拼回整集：用 `stitch-scenes`
 - 要把 AI 生成好的最终剧本归档到项目里：用 `finish`
+- 要把确认后的 state diff 写回 Markdown 状态表：用 `apply-state-diff`
 - 要检查剧本格式和字数：优先用 `review`，再配合 `references/quality-checklist.md` 做人工复核
+- 要检查知情越权、伏笔断裂和梗概偏航：用 `consistency-check`
 - 要做投稿资料：先对照 `references/submission-checklist.md`，再读 `references/submission-package.md`
 - 要判断写法是不是跑偏：读 `references/good-vs-bad-examples.md`
