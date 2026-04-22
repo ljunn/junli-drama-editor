@@ -7,6 +7,12 @@ description: 平台向微短剧编剧工程工作流，适用于“写第X集”
 
 先读 `PROJECT.md`。它把本仓库压成 `Rule / Workflow / Command` 三层入口，先定位任务，再决定要不要下钻到脚本或参考文档。
 
+如果当前环境只是 clone 了仓库、还没有把它注册成真正的本地 skill，先运行：
+
+```bash
+python3 scripts/install_skill.py
+```
+
 ## 核心目标
 
 1. 最高优先级：交付可拍、可拆镜、可做 AI 视频生成输入的剧本，不交付小说化正文。
@@ -129,8 +135,10 @@ description: 平台向微短剧编剧工程工作流，适用于“写第X集”
 1. 新项目先初始化：
 
 ```bash
-python3 scripts/episode_pipeline.py init "项目名" --path <输出目录>
+python3 scripts/episode_pipeline.py init "项目名" --path <输出目录> --seed-file <seed.json>
 ```
+
+如果用户只给了项目名、还没给到最小可写标准的关键项，也可以先跑不带 `--seed-file` 的 `init` 生成骨架；但那只是骨架，不代表已经能开写。旧骨架项目补 seed 时，加 `--force` 覆盖标准文件；覆盖前会自动留 `.bak` 备份。
 
 2. 写新一集前必须先跑：
 
@@ -227,7 +235,7 @@ python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件
 
 必须动作：
 - 先补齐最少 5 项：剧名类型、核心爽点、男女主关系、主线冲突、目标集数
-- 初始化项目
+- 把这些信息整理进 seed JSON，再初始化项目
 - 产出 5 个配置文件和 4 个投稿基础文档
 - 未达到“最小可写标准”前，只能补配置，不能直接开写正文
 

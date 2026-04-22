@@ -69,9 +69,15 @@
 4. 目标集数
 5. 第 1 集核心事件
 
+如果这 5 项已经明确，优先整理成 seed JSON，再运行：
+
+```bash
+python3 scripts/episode_pipeline.py init-project "项目名" --path <输出目录> --seed-file <seed.json>
+```
+
 ### 情况 2：项目有文件，但还是模板
 
-不要假装可以续写。先把模板项替换掉，再跑 `preflight`。
+不要假装可以续写。裸 `init-project` 只会生成骨架，先把模板项替换掉，再跑 `preflight`。
 
 ### 情况 3：老项目缺历史或状态
 

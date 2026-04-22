@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from new_project import create_drama_project
+    from new_project import create_drama_project, load_seed
 except ModuleNotFoundError:
-    from scripts.new_project import create_drama_project
+    from scripts.new_project import create_drama_project, load_seed
 
 
 REQUIRED_CORE_FILES = (
@@ -238,6 +238,34 @@ def find_missing_files(project_dir: Path) -> list[str]:
         if not (project_dir / relative_path).exists():
             missing.append(relative_path)
     return missing
+
+
+def collect_preflight_report(project_dir: Path) -> tuple[list[str], list[str], list[str]]:
+    missing = find_missing_files(project_dir)
+    blockers = collect_preflight_blockers(project_dir) if not missing else []
+    warnings = collect_preflight_warnings(project_dir) if not missing else []
+    return missing, blockers, warnings
+
+
+def ensure_preflight_ready(project_dir: Path, command_name: str) -> tuple[bool, list[str]]:
+    missing, blockers, warnings = collect_preflight_report(project_dir)
+    if missing:
+        print(f"{command_name} 失败：项目尚未通过 preflight。")
+        print("缺少以下文件：")
+        for item in missing:
+            print(f"- {item}")
+        return False, warnings
+    if blockers:
+        print(f"{command_name} 失败：项目尚未通过 preflight。")
+        print("以下内容仍是空壳或模板占位：")
+        for item in blockers:
+            print(f"- {item}")
+        if warnings:
+            print("\n提醒：")
+            for item in warnings:
+                print(f"- {item}")
+        return False, warnings
+    return True, warnings
 
 
 def parse_outline_entry(line: str) -> tuple[int | None, str | None, str | None]:
@@ -945,16 +973,19 @@ def render_catalog(title: str, catalog: list[dict[str, Any]]) -> None:
 
 
 def command_init(args: argparse.Namespace) -> int:
-    project_dir = create_drama_project(args.project_name, Path(args.path).resolve())
+    project_dir = create_drama_project(
+        args.project_name,
+        Path(args.path).resolve(),
+        seed_data=args.seed_data,
+        overwrite=args.force,
+    )
     print(project_dir)
     return 0
 
 
 def command_preflight(args: argparse.Namespace) -> int:
     project_dir = ensure_project_dir(Path(args.project_dir))
-    missing = find_missing_files(project_dir)
-    blockers = collect_preflight_blockers(project_dir) if not missing else []
-    warnings = collect_preflight_warnings(project_dir) if not missing else []
+    missing, blockers, warnings = collect_preflight_report(project_dir)
     if missing:
         print("Preflight 失败，缺少以下文件：")
         for item in missing:
@@ -981,18 +1012,8 @@ def command_preflight(args: argparse.Namespace) -> int:
 
 def command_resume(args: argparse.Namespace) -> int:
     project_dir = ensure_project_dir(Path(args.project_dir))
-    missing = find_missing_files(project_dir)
-    blockers = collect_preflight_blockers(project_dir) if not missing else []
-    warnings = collect_preflight_warnings(project_dir) if not missing else []
-    if missing:
-        print("Resume 失败，缺少以下文件：")
-        for item in missing:
-            print(f"- {item}")
-        return 1
-    if blockers:
-        print("Resume 失败，以下内容仍需先补齐：")
-        for item in blockers:
-            print(f"- {item}")
+    ready, warnings = ensure_preflight_ready(project_dir, "Resume")
+    if not ready:
         return 1
 
     task_log = read_text(project_dir / "task_log.md")
@@ -1156,6 +1177,9 @@ def resolve_episode_meta(project_dir: Path, episode_num: int, title: str | None,
 
 def command_plan(args: argparse.Namespace) -> int:
     project_dir = ensure_project_dir(Path(args.project_dir))
+    ready, _ = ensure_preflight_ready(project_dir, "Plan")
+    if not ready:
+        return 1
     title, core_event = resolve_episode_meta(project_dir, args.episode_num, args.title, args.core_event)
     runtime_path = plan_output_path_for_episode(project_dir, args.episode_num)
     runtime_path.write_text(
@@ -1643,6 +1667,9 @@ def command_compose(args: argparse.Namespace) -> int:
         return 1
 
     project_dir = ensure_project_dir(Path(args.project_dir))
+    ready, _ = ensure_preflight_ready(project_dir, "Compose")
+    if not ready:
+        return 1
     title, core_event = resolve_episode_meta(project_dir, args.episode_num, args.title, args.core_event)
     blockers, warnings = collect_episode_context_issues(project_dir, args.episode_num, title, core_event)
     if blockers:
@@ -1666,6 +1693,9 @@ def command_compose(args: argparse.Namespace) -> int:
 
 def command_compose_scenes(args: argparse.Namespace) -> int:
     project_dir = ensure_project_dir(Path(args.project_dir))
+    ready, _ = ensure_preflight_ready(project_dir, "Compose-scenes")
+    if not ready:
+        return 1
     title, core_event = resolve_episode_meta(project_dir, args.episode_num, args.title, args.core_event)
     blockers, warnings = collect_episode_context_issues(project_dir, args.episode_num, title, core_event)
     if blockers:
@@ -1714,6 +1744,9 @@ def command_compose_scenes(args: argparse.Namespace) -> int:
 
 def command_compose_shots(args: argparse.Namespace) -> int:
     project_dir = ensure_project_dir(Path(args.project_dir))
+    ready, _ = ensure_preflight_ready(project_dir, "Compose-shots")
+    if not ready:
+        return 1
     title, core_event = resolve_episode_meta(project_dir, args.episode_num, args.title, args.core_event)
     blockers, warnings = collect_episode_context_issues(project_dir, args.episode_num, title, core_event)
     if blockers:
@@ -2014,10 +2047,17 @@ def update_recent_summaries(task_log: str, episode_num: int, title: str, summary
 
 def command_finish(args: argparse.Namespace) -> int:
     project_dir = ensure_project_dir(Path(args.project_dir))
+    ready, _ = ensure_preflight_ready(project_dir, "Finish")
+    if not ready:
+        return 1
     script_path = Path(args.script_path).resolve()
     if not script_path.exists():
         print(f"剧本文件不存在：{script_path}")
         return 1
+    check_status = command_check(argparse.Namespace(script_path=args.script_path, max_chars=args.max_chars))
+    if check_status != 0:
+        print("\nFinish 终止：请先修复 `check/review` 的错误项，再回写状态。")
+        return check_status
     archived_script_path = persist_episode_script(project_dir, args.episode_num, script_path)
 
     title, core_event = resolve_episode_meta(project_dir, args.episode_num, args.title, args.core_event)
@@ -2109,10 +2149,14 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser = subparsers.add_parser("init")
     init_parser.add_argument("project_name")
     init_parser.add_argument("--path", default=".")
+    init_parser.add_argument("--seed-file", help="可选 JSON 文件；用于直接初始化到最小可写标准。")
+    init_parser.add_argument("--force", action="store_true", help="覆盖已有同名项目中的标准文件，并先写入 .bak 备份。")
 
     init_project_parser = subparsers.add_parser("init-project")
     init_project_parser.add_argument("project_name")
     init_project_parser.add_argument("--path", default=".")
+    init_project_parser.add_argument("--seed-file", help="可选 JSON 文件；用于直接初始化到最小可写标准。")
+    init_project_parser.add_argument("--force", action="store_true", help="覆盖已有同名项目中的标准文件，并先写入 .bak 备份。")
 
     preflight_parser = subparsers.add_parser("preflight")
     preflight_parser.add_argument("project_dir")
@@ -2184,6 +2228,7 @@ def build_parser() -> argparse.ArgumentParser:
     finish_parser.add_argument("--title")
     finish_parser.add_argument("--core-event")
     finish_parser.add_argument("--summary", required=True)
+    finish_parser.add_argument("--max-chars", type=int, default=3000, help="回写前结构检查使用的最大字符数阈值。")
 
     return parser
 
@@ -2202,8 +2247,10 @@ def main() -> int:
         render_catalog("Command Catalog", COMMAND_LAYER_CATALOG)
         return 0
     if args.command == "init":
+        args.seed_data = load_seed(args.seed_file)
         return command_init(args)
     if args.command == "init-project":
+        args.seed_data = load_seed(args.seed_file)
         return command_init(args)
     if args.command == "preflight":
         return command_preflight(args)
