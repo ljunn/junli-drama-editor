@@ -7,7 +7,7 @@
 推荐结构：
 
 1. 这次处理的是哪一集、哪种模式
-2. 是否已按流程完成 `preflight / resume / plan / compose-scenes / compose-shots`
+2. 是否已按本次实际层级完成 `preflight / resume / plan / compose-scenes / compose-shots` 中相关步骤
 3. 这次正文或 Prompt Pack 的核心结果
 4. 是否需要状态回写或人工确认
 

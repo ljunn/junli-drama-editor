@@ -97,6 +97,22 @@ class EpisodePipelineCliTests(unittest.TestCase):
         ]
         return "\n".join(lines) + "\n"
 
+    def build_valid_shot(self, *, seconds: str = "0-5秒", extra_dialogue: str | None = None) -> str:
+        lines = [
+            f"镜头1: 顾家宴会厅({seconds})",
+            "(主体)顾晚昭白衬衫黑西裙，视线钉死在裂开的手镯上。",
+            "(环境)宴会厅灯光压在珠宝展台上，宾客影子在她背后晃动。",
+            "(动作)顾晚昭抬眼锁住顾清漪，右手按住手镯裂口不让她抽走。",
+            "(光影)冷白顶灯压出她眉骨的硬边，裂口反出一道冷光。",
+            "(镜头)固定近景起，轻推到她按住裂口的手部。",
+            "(画质)4K，金属纹理和人物边缘清晰。",
+            "台词:",
+            '顾晚昭:"你急着甩锅，不如先解释谁碰过它。"',
+        ]
+        if extra_dialogue:
+            lines.append(extra_dialogue)
+        return "\n".join(lines) + "\n"
+
     def test_init_with_seed_passes_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "种子项目"
@@ -149,7 +165,112 @@ class EpisodePipelineCliTests(unittest.TestCase):
             self.assertTrue(prompt_path.exists())
             prompt_text = prompt_path.read_text(encoding="utf-8")
             self.assertIn("## Few-shot 对照", prompt_text)
+            self.assertIn("## 抓人规则", prompt_text)
             self.assertIn("软卡点 vs 狠卡点", prompt_text)
+            self.assertIn("当前场至少回应 1 个旧悬念", prompt_text)
+
+    def test_screenplay_format_reference_separates_scene_and_shot_modes(self) -> None:
+        reference_text = (REPO_ROOT / "references" / "screenplay-format.md").read_text(encoding="utf-8")
+        self.assertIn("## 2. 5秒单镜头格式", reference_text)
+        self.assertIn("镜头1: 订婚宴后台(0-5秒)", reference_text)
+        self.assertNotIn("(镜头)5s眼部特写，切二人中景", reference_text)
+
+    def test_compose_shots_prompt_enforces_single_5_second_shot_skeleton(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = self.init_seeded_project(tmp, "单镜头提示项目")
+
+            plan_result = self.run_cli(PIPELINE, "plan", project_dir, "--episode-num", "1")
+            self.assertEqual(plan_result.returncode, 0, self.combined_output(plan_result))
+
+            scene_path = project_dir / "runtime" / "episode-0001" / "scene-01" / "scene.md"
+            scene_path.parent.mkdir(parents=True, exist_ok=True)
+            scene_path.write_text(
+                "\n".join(
+                    [
+                        "## 当前场摘要",
+                        "- 地点：顾家宴会厅",
+                        "- 人物：顾晚昭、顾清漪、裴砚川",
+                        "- 入场状态：顾晚昭刚发现手镯事故是局。",
+                        "- 当前场目标：当众反压顾清漪。",
+                        "- 当前场冲突：顾清漪想把责任压到女主头上。",
+                        "- 出场变化：男主开始确认女主手里另有筹码。",
+                        "",
+                        "## 5秒镜头单元表",
+                        "| 镜头 | 秒数 | 画面目标 | 人物/动作 | 台词/口型 | 承上启下 |",
+                        "|------|------|----------|-----------|-----------|----------|",
+                        "| 1 | 0-5秒 | 女主锁定做局人 | 顾晚昭抬眼盯住顾清漪，手指按住裂口 | 无台词 | 压到镜头2继续反打 |",
+                        "| 2 | 5-10秒 | 继妹先声夺人 | 顾清漪前压半步，抢先甩锅 | 顾清漪:\\\"是你碰坏的。\\\" | 把压力交给镜头3 |",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            compose_result = self.run_cli(
+                PIPELINE,
+                "compose-shots",
+                project_dir,
+                "--episode-num",
+                "1",
+                "--scene-num",
+                "1",
+                "--shot-num",
+                "1",
+            )
+            self.assertEqual(compose_result.returncode, 0, self.combined_output(compose_result))
+
+            prompt_path = project_dir / "runtime" / "episode-0001" / "scene-01" / "shot-001.prompt.md"
+            self.assertTrue(prompt_path.exists())
+            prompt_text = prompt_path.read_text(encoding="utf-8")
+            self.assertIn("只输出 `镜头1:` 这一镜头", prompt_text)
+            self.assertIn("镜头1: 顾家宴会厅(0-5秒)", prompt_text)
+            self.assertIn("场景1: 地点(0-45秒)", prompt_text)
+            self.assertIn("下面这种输出是错的，禁止出现", prompt_text)
+
+    def test_quality_checklist_mentions_single_shot_mode(self) -> None:
+        checklist_text = (REPO_ROOT / "references" / "quality-checklist.md").read_text(encoding="utf-8")
+        self.assertIn("## 单镜头检查", checklist_text)
+        self.assertIn("不要拿 `review` 的场景块规则去检查 `shot-001.md`", checklist_text)
+
+    def test_workflow_catalog_defaults_to_directory_delivery(self) -> None:
+        result = self.run_cli(PIPELINE, "workflows")
+        self.assertEqual(result.returncode, 0, self.combined_output(result))
+        self.assertIn("步骤: compose-scenes -> compose-shots", result.stdout)
+        self.assertNotIn("步骤: compose-scenes -> compose-shots -> stitch-scenes", result.stdout)
+
+    def test_check_shot_accepts_valid_single_shot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            shot_path = Path(tmp) / "shot-001.md"
+            shot_path.write_text(self.build_valid_shot(), encoding="utf-8")
+
+            result = self.run_cli(PIPELINE, "check-shot", shot_path)
+            self.assertEqual(result.returncode, 0, self.combined_output(result))
+            self.assertIn("单镜头数：1", result.stdout)
+
+    def test_check_shot_rejects_scene_block_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            shot_path = Path(tmp) / "not-a-shot.md"
+            shot_path.write_text(self.build_valid_script(), encoding="utf-8")
+
+            result = self.run_cli(PIPELINE, "check-shot", shot_path)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("检测到 `场景X:` 场景块", result.stdout)
+
+    def test_check_shot_rejects_non_5_second_or_multi_dialogue_shot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            shot_path = Path(tmp) / "bad-shot.md"
+            shot_path.write_text(
+                self.build_valid_shot(
+                    seconds="0-8秒",
+                    extra_dialogue='顾清漪:"你拿不出证据。"',
+                ),
+                encoding="utf-8",
+            )
+
+            result = self.run_cli(PIPELINE, "review-shot", shot_path)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("不是严格 5 秒镜头", result.stdout)
+            self.assertIn("有效对白超过 1 句", result.stdout)
 
     def test_force_seed_can_upgrade_existing_skeleton(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

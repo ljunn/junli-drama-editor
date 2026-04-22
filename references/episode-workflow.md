@@ -89,13 +89,16 @@
 - 再用 `compose-shots` 从 `scene.md` 里按镜头拆出 `shot-001.prompt.md`
 - `compose-shots` 一次只允许生成 1 个镜头 prompt；不传 `--shot-num` 时，也只会挑下一个缺失镜头
 - 每次只生成一个镜头，结果另存为 `runtime/episode-XXXX/scene-YY/shot-001.md`
-- 最后再用 `stitch-scenes` 拼回整集
+- 默认交付到目录层级就够了，不强制再拼回整集
+- 只有老工具强制要求单文件时，才额外用 `stitch-scenes` 兼容输出
 
 ## 阶段 4：质量检查
 
 最少检查这些项：
 
-- 先跑 `check/review` 做结构巡检
+- 整集 / 场景块正文先跑 `check/review` 做结构巡检
+- 单镜头结果先跑 `check-shot/review-shot`
+- 单镜头结果不要硬套 `review`；再按 `references/quality-checklist.md` 里的“单镜头检查”逐项核对
 - 是否仍是剧本，不是小说
 - 首场景主角外貌是否完整
 - 后续场景是否只保留服装变化

@@ -56,7 +56,7 @@ RULE_LAYER_CATALOG: list[dict[str, Any]] = [
             "references/screenplay-format.md",
             "references/quality-checklist.md",
         ],
-        "summary": "约束单集剧本格式、3000 字符限制、场景块结构和风险词。",
+        "summary": "约束单集剧本与 5 秒单镜头格式、3000 字符限制、场景块结构和风险词。",
     },
 ]
 
@@ -80,6 +80,12 @@ WORKFLOW_LAYER_CATALOG: list[dict[str, Any]] = [
         "summary": "检查字数、场景块、格式和小说化风险；不替代人工爽点/卡点复核。",
     },
     {
+        "id": "review-shot",
+        "title": "单镜头结构化质检",
+        "steps": ["check-shot"],
+        "summary": "检查单镜头标题、5 秒区间、字段完整性，以及是否混回整场格式。",
+    },
+    {
         "id": "consistency-check",
         "title": "项目上下文一致性检查",
         "steps": ["consistency-check"],
@@ -88,8 +94,8 @@ WORKFLOW_LAYER_CATALOG: list[dict[str, Any]] = [
     {
         "id": "compose-scenes",
         "title": "分场创作包",
-        "steps": ["compose-scenes", "compose-shots", "stitch-scenes"],
-        "summary": "把整集拆成单集目录、单场 Prompt Pack 和单镜头 Prompt Pack，适合 5 秒视频镜头工作流。",
+        "steps": ["compose-scenes", "compose-shots"],
+        "summary": "把整集拆成单集目录、单场 Prompt Pack 和单镜头 Prompt Pack，默认直接以目录化结果交付。",
     },
     {
         "id": "finish",
@@ -103,7 +109,7 @@ COMMAND_LAYER_CATALOG: list[dict[str, Any]] = [
     {"group": "Layer", "commands": ["rules", "workflows", "commands"]},
     {
         "group": "Workflow",
-        "commands": ["init-project", "next-episode", "compose-scenes", "compose-shots", "review", "consistency-check", "finish", "apply-state-diff"],
+        "commands": ["init-project", "next-episode", "compose-scenes", "compose-shots", "review", "review-shot", "consistency-check", "finish", "apply-state-diff"],
     },
     {
         "group": "Primitive",
@@ -117,6 +123,7 @@ COMMAND_LAYER_CATALOG: list[dict[str, Any]] = [
             "compose-shots",
             "stitch-scenes",
             "check",
+            "check-shot",
             "consistency-check",
             "finish",
             "apply-state-diff",
@@ -151,8 +158,10 @@ PLACEHOLDER_VALUES = (
 COMPLETED_STATUSES = {"已完成", "done", "完成"}
 TEXT_SCRIPT_EXTENSIONS = (".md", ".txt")
 MIN_EFFECTIVE_SCRIPT_CHARS = 1200
+MIN_EFFECTIVE_SHOT_CHARS = 80
 MIN_DIALOGUE_LINES_PER_SCENE = 3
 MIN_DIALOGUE_LINES_TOTAL = 12
+MAX_DIALOGUE_LINES_PER_SHOT = 1
 FINISH_BLOCKING_RISK_WORD_THRESHOLD = 3
 SIGNIFICANT_TERM_STOPWORDS = {
     "当前",
@@ -196,6 +205,7 @@ SIGNIFICANT_TERM_STOPWORDS = {
 DIALOGUE_LINE_PATTERN = re.compile(
     r"(?m)^(?!场景\d+[:：])(?!台词[:：])(?![【(（\-#])[^:\n：]{1,20}[:：]\s*(?!$)"
 )
+SHOT_HEADER_PATTERN = re.compile(r"^镜头(\d+)[:：]\s*(.*?)\s*\((\d+)\s*-\s*(\d+)\s*(?:s|S|秒)?\)$")
 
 
 def read_text(path: Path) -> str:
@@ -1538,6 +1548,13 @@ def extract_scene_brief_text(text: str) -> str:
     return extract_scene_body_without_shot_table(text)
 
 
+def extract_scene_brief_field(text: str, field_name: str) -> str:
+    brief_text = extract_scene_brief_text(text)
+    if not brief_text:
+        return ""
+    return extract_bullet_mapping(brief_text).get(field_name, "").strip()
+
+
 def parse_shot_index(value: str) -> int | None:
     match = re.search(r"(\d+)", value)
     return int(match.group(1)) if match else None
@@ -2045,6 +2062,11 @@ def build_prompt_pack(project_dir: Path, episode_num: int, title: str, core_even
         "references/good-vs-bad-examples.md",
         ("小说化 vs 可拍", "无效对白 vs 有功能对白", "软卡点 vs 狠卡点"),
     )
+    attraction_lines = build_reference_excerpt(
+        project_dir,
+        "references/story-attraction.md",
+        ("前 20% 钩子", "旧悬念回报 + 新钩子续压", "冲突必须绑代价", "受挫后的补偿", "情绪落点", "实感回报"),
+    )
     repair_lines = build_reference_excerpt(
         project_dir,
         "references/repair-strategies.md",
@@ -2084,6 +2106,11 @@ def build_prompt_pack(project_dir: Path, episode_num: int, title: str, core_even
         "- 默认每个场景 3-6 句有效对白；若对白更少，必须用动作结果补足推进，不能变成空镜+一句结论。",
         "- 本集至少落地 1 个硬信息揭示、1 个正面对撞、1 个主动反制、1 个强后果卡点。",
         "- 爽点必须表现为当场占优、拆穿、截胡、证据到手、身份压制、局势翻转之一，不能只是“知道了一个消息”。",
+        "- 开场前 20% 必须给钩子：异常信息、即时冲突、认知钩子或高吸引力动作，至少一种。",
+        "- 本集至少回应 1 个旧悬念，同时再压出 1 个新钩子或升级现有钩子，不能只留空悬念。",
+        "- 冲突必须绑定可感代价：身份、关系、资源、名誉、安全、时间、阵营，至少一类要被改写。",
+        "- 主角受挫后要尽快给补偿基础：信息收益、关系回应、反制抓手、资源入手，至少一种。",
+        "- 情绪优先落在动作、环境、停顿和后果里，不要靠旁白直接命名。",
         "- 宁可缩短 `(光影)/(镜头)/(画质)` 修饰词，也不要牺牲冲突、反转和对白密度。",
     ]
 
@@ -2111,6 +2138,15 @@ def build_prompt_pack(project_dir: Path, episode_num: int, title: str, core_even
                 "",
                 "## Few-shot 对照",
                 *few_shot_lines,
+            ]
+        )
+
+    if attraction_lines:
+        prompt_lines.extend(
+            [
+                "",
+                "## 抓人规则",
+                *attraction_lines,
             ]
         )
 
@@ -2225,6 +2261,11 @@ def build_scene_prompt_pack(
         "references/good-vs-bad-examples.md",
         ("小说化 vs 可拍", "软卡点 vs 狠卡点"),
     )
+    attraction_lines = build_reference_excerpt(
+        project_dir,
+        "references/story-attraction.md",
+        ("前 20% 钩子", "旧悬念回报 + 新钩子续压", "冲突必须绑代价", "受挫后的补偿", "情绪落点", "实感回报"),
+    )
     repair_lines = build_reference_excerpt(
         project_dir,
         "references/repair-strategies.md",
@@ -2300,6 +2341,15 @@ def build_scene_prompt_pack(
             ]
         )
 
+    if attraction_lines:
+        prompt_lines.extend(
+            [
+                "",
+                "## 抓人规则",
+                *attraction_lines,
+            ]
+        )
+
     if repair_lines:
         prompt_lines.extend(
             [
@@ -2317,10 +2367,15 @@ def build_scene_prompt_pack(
             "- 这一层只负责产出“当前场摘要 + 严格 5 秒镜头表”，不负责写 40 秒、60 秒的长场景正文。",
             "- 当前场摘要只保留地点、人物、目标、冲突、出场变化，必须短，不能写成长块对白和动作。",
             "- 本场内部也要完成“目标 -> 阻碍 -> 变化”三步，但要拆进镜头表里，不要堆成一个长场景块。",
+            "- 当前场前 20% 必须亮钩子；通常等价为前 1-2 个镜头就让观众知道局势不对了。",
+            "- 当前场至少回应 1 个旧悬念或上场压力，同时再压出下场必须处理的新问题。",
+            "- 当前场至少给 1 次实感回报：翻盘、揭示、关系推进、资源落袋，至少一种，不能只剩压力。",
+            "- 当前场冲突必须能看到代价；如果输了却像没事发生，说明冲突发飘了。",
             f"- 本场结尾：{bridge_hint}",
             f"- 每个镜头单元必须严格等于 {shot_seconds} 秒，不是“大约 {shot_seconds} 秒”。",
             "- 镜头表必须写成连续时间段：`0-5秒`、`5-10秒`、`10-15秒`……不允许 `0-8秒`、`约5秒`、`5秒左右` 这种写法。",
             "- 每个镜头单元只允许 1 个主要动作节拍 + 最多 1 句台词；如果要连续做两件关键事，就拆成两个镜头文件。",
+            "- 情绪优先落在动作、环境、停顿和后果里，不要把人物情绪写成抽象结论。",
             "- 宁可缩短 `(光影)/(镜头)/(画质)` 修饰词，也不要把动作、反转和对白压没。",
             "- 禁止输出 `场景1: 地点(0-40秒)` 这种长场景正文；一旦写出这种东西，视为失败。",
             "",
@@ -2439,6 +2494,11 @@ def build_shot_prompt_pack(
         "references/good-vs-bad-examples.md",
         ("小说化 vs 可拍", "无效对白 vs 有功能对白"),
     )
+    attraction_lines = build_reference_excerpt(
+        project_dir,
+        "references/story-attraction.md",
+        ("冲突必须绑代价", "情绪落点", "实感回报"),
+    )
     repair_lines = build_reference_excerpt(
         project_dir,
         "references/repair-strategies.md",
@@ -2446,6 +2506,8 @@ def build_shot_prompt_pack(
     )
 
     scene_header = f"场景{scene_num}"
+    scene_location = extract_scene_brief_field(scene_text, "地点")
+    shot_title_target = scene_location or scene_header or f"场景{scene_num}"
     scene_summary_lines = [line.strip() for line in scene_brief.splitlines() if line.strip()]
     scene_summary = " / ".join(scene_summary_lines[:3])
     bridge_hint = (
@@ -2491,7 +2553,7 @@ def build_shot_prompt_pack(
         *build_shot_plan_excerpt(shot_rows, shot_num),
         "",
         f"- 当前场参考文件：{scene_display_path}",
-        f"- 当前场标题：{scene_header or f'场景{scene_num}'}",
+        f"- 当前场标题：{shot_title_target}",
         f"- 当前场摘要：{scene_summary or '以当前镜头行和场景卡为准，不要扩成整场。'}",
     ]
 
@@ -2522,6 +2584,15 @@ def build_shot_prompt_pack(
             ]
         )
 
+    if attraction_lines:
+        prompt_lines.extend(
+            [
+                "",
+                "## 抓人规则",
+                *attraction_lines,
+            ]
+        )
+
     if repair_lines:
         prompt_lines.extend(
             [
@@ -2540,18 +2611,44 @@ def build_shot_prompt_pack(
             "- 只细化当前镜头的表情、道具交互、机位、运动方式和口型，不要重新扩成整场或整集。",
             "- 当前镜头台词最多 1 句；如果需要第二句对白，拆到下一个镜头。",
             "- 如果当前镜头没有台词，也要明确口型为空、动作承担推进。",
+            "- 当前镜头必须承担一种吸引功能：异常信息、压力升级、实感回报、关系变化，至少一种。",
+            "- 冲突要看得到代价或后果，不要只写漂亮动作却没有局势改写。",
+            "- 情绪写在动作、停顿和后果里，不要把 5 秒镜头写成抽象气氛说明。",
             f"- {bridge_hint}",
             "- 宁可把一个动作拆细，也不要把两个节拍压进同一句抽象总结。",
             "- 输出文本总量控制在一个短镜头能承载的颗粒度，不要写成长段分镜小说。",
             "",
             "## 输出格式",
             f"1. 只输出 `镜头{shot_num}:` 这一镜头。",
-            f"2. 标题建议：`镜头{shot_num}: {scene_header or f'场景{scene_num}'}({current_shot_row['seconds']})`。",
+            f"2. 标题建议：`镜头{shot_num}: {shot_title_target}({current_shot_row['seconds']})`。",
             "3. 正文结构：`(主体)` / `(环境)` / `(动作)` / `(光影)` / `(镜头)` / `(画质)` / `台词:`。",
             "4. `(动作)` 只写当前 5 秒内的起点动作和结束状态，不要写下一个镜头的结果。",
             "5. 台词只保留当前镜头真正会说出的 0-1 句，不要偷带后续镜头内容。",
             f"6. 生成结果默认保存到 `runtime/episode-{episode_num:04d}/scene-{scene_num:02d}/shot-{shot_num:03d}.md`。",
             "7. 不要输出解释，不要输出其他镜头。",
+            "",
+            "## 唯一允许骨架",
+            "```md",
+            f"镜头{shot_num}: {shot_title_target}({current_shot_row['seconds']})",
+            "(主体)...",
+            "(环境)...",
+            "(动作)...",
+            "(光影)...",
+            "(镜头)...",
+            "(画质)...",
+            "台词:",
+            "角色名:\"...\"",
+            "```",
+            "",
+            "## 错误示例",
+            "下面这种输出是错的，禁止出现：",
+            "```md",
+            "场景1: 地点(0-45秒)",
+            "【环境空镜5s】...",
+            "(主体)...",
+            "台词:",
+            "角色A:\"...\"",
+            "```",
             "",
             "## 生成前自检",
             "- 这个镜头单独拿出来，观众能看懂它的动作目标和结果吗？",
@@ -2792,8 +2889,25 @@ def count_dialogue_lines(text: str) -> int:
     return len(DIALOGUE_LINE_PATTERN.findall(text))
 
 
+def extract_dialogue_section(text: str) -> str:
+    for marker in ("台词:", "台词："):
+        if marker in text:
+            return text.split(marker, 1)[1]
+    return ""
+
+
 def split_scene_blocks(text: str) -> list[tuple[str, str]]:
     matches = list(re.finditer(r"(?m)^场景\d+:\s*.*$", text))
+    blocks: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        start = match.start()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        blocks.append((match.group(0), text[start:end]))
+    return blocks
+
+
+def split_shot_blocks(text: str) -> list[tuple[str, str]]:
+    matches = list(re.finditer(r"(?m)^镜头\d+[:：]\s*.*$", text))
     blocks: list[tuple[str, str]] = []
     for index, match in enumerate(matches):
         start = match.start()
@@ -2818,6 +2932,12 @@ def detect_location_changes(headers: list[str]) -> tuple[int, list[str]]:
             changes += 1
             previous = location
     return changes, locations
+
+
+def extract_marker_line_value(text: str, marker: str) -> str:
+    pattern = rf"(?m)^{re.escape(marker)}\s*(.*)$"
+    match = re.search(pattern, text)
+    return match.group(1).strip() if match else ""
 
 
 def analyze_script_quality(text: str, max_chars: int) -> dict[str, Any]:
@@ -2903,6 +3023,113 @@ def analyze_script_quality(text: str, max_chars: int) -> dict[str, Any]:
     }
 
 
+def analyze_shot_quality(text: str, shot_seconds: int) -> dict[str, Any]:
+    effective_chars = count_effective_chars(text)
+    blank_line_count = sum(1 for line in text.splitlines() if not line.strip())
+    separator_count = text.count("---")
+    shot_blocks = split_shot_blocks(text)
+    scene_blocks = split_scene_blocks(text)
+    headers = [header for header, _ in shot_blocks]
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    dialogue_counts: list[int] = []
+    parsed_headers: list[dict[str, Any]] = []
+
+    if scene_blocks:
+        errors.append("检测到 `场景X:` 场景块；当前命令只接受单镜头文件。")
+    if not shot_blocks:
+        errors.append("未检测到任何 `镜头X:` 标题。")
+    if len(shot_blocks) > 1:
+        errors.append("单镜头检查只允许 1 个镜头块，当前文件包含多个镜头。")
+    if effective_chars < MIN_EFFECTIVE_SHOT_CHARS:
+        warnings.append(
+            f"单镜头内容偏短：{effective_chars} < {MIN_EFFECTIVE_SHOT_CHARS}，容易只剩提纲感。"
+        )
+    if blank_line_count > 0:
+        warnings.append("存在空行，可能把单镜头写散。")
+    if separator_count > 0:
+        warnings.append("存在 --- 分隔符，建议删除。")
+
+    required_markers = ("(主体)", "(动作)", "(光影)", "(镜头)", "(画质)", "台词:")
+    for header, block in shot_blocks:
+        normalized_header = header.strip()
+        header_match = SHOT_HEADER_PATTERN.match(normalized_header)
+        if not header_match:
+            errors.append(f"{normalized_header} 缺少合法单镜头标题或时长范围。")
+            continue
+
+        shot_index = int(header_match.group(1))
+        location = header_match.group(2).strip()
+        start_second = int(header_match.group(3))
+        end_second = int(header_match.group(4))
+        duration_second = end_second - start_second
+        parsed_headers.append(
+            {
+                "shot_index": shot_index,
+                "location": location,
+                "start_second": start_second,
+                "end_second": end_second,
+                "duration_second": duration_second,
+            }
+        )
+
+        if duration_second != shot_seconds:
+            errors.append(f"{normalized_header} 不是严格 {shot_seconds} 秒镜头。")
+        if not location or re.fullmatch(r"场景\d+", location):
+            errors.append(f"{normalized_header} 的标题位置应写地点名，不应只写场景编号。")
+
+        missing_markers = [marker for marker in required_markers if marker not in block]
+        if missing_markers:
+            errors.append(f"{normalized_header} 缺少字段：{', '.join(missing_markers)}")
+
+        if "【环境空镜" in block:
+            warnings.append(f"{normalized_header} 出现 `【环境空镜】`，疑似混入整场场景块格式。")
+
+        dialogue_text = extract_dialogue_section(block)
+        dialogue_count = count_dialogue_lines(dialogue_text)
+        dialogue_counts.append(dialogue_count)
+        if dialogue_count > MAX_DIALOGUE_LINES_PER_SHOT:
+            errors.append(
+                f"{normalized_header} 的有效对白超过 {MAX_DIALOGUE_LINES_PER_SHOT} 句；当前镜头拆分过粗。"
+            )
+        if dialogue_text and dialogue_count == 0 and "无台词" not in dialogue_text and "口型为空" not in dialogue_text:
+            warnings.append(f"{normalized_header} 的 `台词:` 后未检测到有效对白行；若为纯动作镜头，建议显式标注无台词。")
+
+        action_text = extract_marker_line_value(block, "(动作)")
+        action_segments = [segment.strip() for segment in re.split(r"[。！？!?]+", action_text) if segment.strip()]
+        if len(action_segments) > 1:
+            warnings.append(f"{normalized_header} 的 `(动作)` 可能包含多个动作节拍，建议继续拆细。")
+
+    for keyword in BANNED_RISK_WORDS:
+        count = text.count(keyword)
+        if count:
+            warnings.append(f"检测到风险词 `{keyword}` {count} 次。")
+
+    dialogue_action_matches = re.findall(
+        r"(?m)^[^:\n：]+[（(][^)\n]*(动作|语速)[^)\n]*[)）]\s*[:：]",
+        text,
+    )
+    if dialogue_action_matches:
+        warnings.append("检测到台词行内含动作或语速说明。")
+
+    risk_word_counts = {keyword: text.count(keyword) for keyword in BANNED_RISK_WORDS if text.count(keyword)}
+
+    return {
+        "effective_chars": effective_chars,
+        "shot_blocks": shot_blocks,
+        "headers": headers,
+        "parsed_headers": parsed_headers,
+        "dialogue_counts": dialogue_counts,
+        "total_dialogue_lines": sum(dialogue_counts),
+        "blank_line_count": blank_line_count,
+        "separator_count": separator_count,
+        "errors": errors,
+        "warnings": warnings,
+        "risk_word_counts": risk_word_counts,
+    }
+
+
 def print_script_quality_report(script_path: Path, report: dict[str, Any]) -> None:
     print(f"检查文件：{script_path}")
     print(f"- 有效字符数：{report['effective_chars']}")
@@ -2913,6 +3140,31 @@ def print_script_quality_report(script_path: Path, report: dict[str, Any]) -> No
     print(f"- 有效对白数：{report['total_dialogue_lines']}")
     if report["dialogue_counts"]:
         print(f"- 单场对白数：{' / '.join(str(count) for count in report['dialogue_counts'])}")
+    print(f"- 空行数：{report['blank_line_count']}")
+    print(f"- --- 分隔符数量：{report['separator_count']}")
+
+    if report["errors"]:
+        print("\n错误：")
+        for item in report["errors"]:
+            print(f"- {item}")
+    if report["warnings"]:
+        print("\n警告：")
+        for item in report["warnings"]:
+            print(f"- {item}")
+
+    if not report["errors"] and not report["warnings"]:
+        print("\n检查通过。")
+
+
+def print_shot_quality_report(script_path: Path, report: dict[str, Any]) -> None:
+    print(f"检查文件：{script_path}")
+    print(f"- 有效字符数：{report['effective_chars']}")
+    print(f"- 单镜头数：{len(report['shot_blocks'])}")
+    if report["headers"]:
+        print(f"- 镜头标题：{' / '.join(report['headers'])}")
+    print(f"- 有效对白数：{report['total_dialogue_lines']}")
+    if report["dialogue_counts"]:
+        print(f"- 当前镜头对白数：{' / '.join(str(count) for count in report['dialogue_counts'])}")
     print(f"- 空行数：{report['blank_line_count']}")
     print(f"- --- 分隔符数量：{report['separator_count']}")
 
@@ -2959,6 +3211,17 @@ def command_check(args: argparse.Namespace) -> int:
 
     report = analyze_script_quality(read_text(script_path), args.max_chars)
     print_script_quality_report(script_path, report)
+    return 1 if report["errors"] else 0
+
+
+def command_check_shot(args: argparse.Namespace) -> int:
+    script_path = Path(args.script_path).resolve()
+    if not script_path.exists():
+        print(f"文件不存在：{script_path}")
+        return 1
+
+    report = analyze_shot_quality(read_text(script_path), args.shot_seconds)
+    print_shot_quality_report(script_path, report)
     return 1 if report["errors"] else 0
 
 
@@ -3231,6 +3494,14 @@ def build_parser() -> argparse.ArgumentParser:
     review_parser.add_argument("script_path")
     review_parser.add_argument("--max-chars", type=int, default=3000)
 
+    check_shot_parser = subparsers.add_parser("check-shot")
+    check_shot_parser.add_argument("script_path")
+    check_shot_parser.add_argument("--shot-seconds", type=int, default=5)
+
+    review_shot_parser = subparsers.add_parser("review-shot")
+    review_shot_parser.add_argument("script_path")
+    review_shot_parser.add_argument("--shot-seconds", type=int, default=5)
+
     consistency_parser = subparsers.add_parser("consistency-check")
     consistency_parser.add_argument("project_dir")
     consistency_parser.add_argument("--episode-num", type=int, required=True)
@@ -3297,6 +3568,8 @@ def main() -> int:
         return command_next_episode(args)
     if args.command in {"check", "review"}:
         return command_check(args)
+    if args.command in {"check-shot", "review-shot"}:
+        return command_check_shot(args)
     if args.command == "consistency-check":
         return command_consistency_check(args)
     if args.command == "apply-state-diff":

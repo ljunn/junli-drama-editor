@@ -1,17 +1,13 @@
 ---
 name: junli-drama-editor
-description: 平台向微短剧编剧工程工作流，适用于“写第X集”“续写短剧”“改卡点”“压3000字”“改对白”“恢复状态”“投稿资料”“AI视频版剧本”“拍摄版剧本”等任务；覆盖立项、5 个配置文件初始化、角色状态同步、分集梗概推进、单集剧本创作、定向返修与质量检查。更多信息，关注抖音君黎。
+description: 平台向微短剧编剧工程工作流，适用于“写第X集”“续写短剧”“改卡点”“压3000字”“改对白”“恢复状态”“投稿资料”“AI视频版剧本”“拍摄版剧本”等任务；覆盖立项、5 个配置文件初始化、角色状态同步、分集梗概推进、单集剧本创作、定向返修与质量检查。
 ---
 
 # 君黎 AI 短剧编剧
 
 先读 `PROJECT.md`。它把本仓库压成 `Rule / Workflow / Command` 三层入口，先定位任务，再决定要不要下钻到脚本或参考文档。
 
-如果当前环境只是 clone 了仓库、还没有把它注册成真正的本地 skill，先运行：
-
-```bash
-python3 scripts/install_skill.py
-```
+这是通用 skill，不依赖特定宿主的安装、注册或发现机制。能直接读取本仓库文件时就能使用；`scripts/episode_pipeline.py` 只是仓库附带的可选自动化实现，不是 skill 的前置条件。
 
 ## 核心目标
 
@@ -34,9 +30,10 @@ python3 scripts/install_skill.py
 
 默认 Workflow：
 
-- 新建短剧项目：`init-project`（兼容 `init`）
-- 继续写下一集：`next-episode`
-- 生成单集创作包：`compose`
+- 新建短剧项目：先补齐最小可写标准；仓库脚本可用时，对应 `init-project`（兼容 `init`）
+- 继续写下一集：先恢复状态，再做分场规划；仓库脚本可用时，对应 `next-episode`
+- 生成分场 / 分镜创作包：`compose-scenes` / `compose-shots`
+- 生成整集创作包：`compose`，只在明确要求整集输出时用
 - 单集质检：`review`
 - 单集一致性检查：`consistency-check`
 - 恢复状态 / 修记忆：`resume`
@@ -47,6 +44,7 @@ python3 scripts/install_skill.py
 - `references/trigger-examples.md`
 - 项目是否达到最小可写标准，优先看 `references/minimum-project-standard.md`
 - 写法拿不准时，用 `references/good-vs-bad-examples.md` 校准
+- 想加强抓人度、回报感和钩子密度时，读 `references/story-attraction.md`
 
 ## 参数系统
 
@@ -130,28 +128,30 @@ python3 scripts/install_skill.py
 
 - `references/conflict-resolution.md`
 
-## 硬门槛
+## 执行门槛
 
-命中新建项目、续写、返修、恢复状态、质检时，下面都是必须动作：
+不同 `task` 的门槛不同，不要把整套链路硬套到所有请求上。
 
-1. 新项目先初始化：
+1. `task=init` 时，先补最小可写标准，再初始化项目：
 
 ```bash
 python3 scripts/episode_pipeline.py init "项目名" --path <输出目录> --seed-file <seed.json>
 ```
 
-如果用户只给了项目名、还没给到最小可写标准的关键项，也可以先跑不带 `--seed-file` 的 `init` 生成骨架；但那只是骨架，不代表已经能开写。旧骨架项目补 seed 时，加 `--force` 覆盖标准文件；覆盖前会自动留 `.bak` 备份。
+如果当前环境没有 CLI，就按同样结构手动建立 5 个核心配置文件、状态目录和投稿基础文档。
 
-2. 写新一集前必须先跑：
+如果用户只给了项目名、还没给到最小可写标准的关键项，也可以先生成骨架；但那只是骨架，不代表已经能开写。旧骨架项目补 seed 时，加 `--force` 覆盖标准文件；覆盖前会自动留 `.bak` 备份。
+
+2. `task=next` 时，写新一集前必须先恢复上下文：
 
 ```bash
 python3 scripts/episode_pipeline.py preflight <项目目录>
 python3 scripts/episode_pipeline.py resume <项目目录>
 ```
 
-`preflight` 不只检查文件存在，还会拦截模板占位和空壳配置。
+如果当前环境没有 CLI，也要等价完成这两件事：确认项目不是空壳模板，并拉出最近 2-3 集摘要、当前角色知情状态、活跃伏笔、下一集目标。
 
-3. 新一集默认流程：
+3. `task=next` 的默认流程是分场规划，不是整集直写：
 
 ```bash
 python3 scripts/episode_pipeline.py plan <项目目录> --episode-num <集数>
@@ -166,12 +166,11 @@ python3 scripts/episode_pipeline.py compose-scenes <项目目录> --episode-num 
 python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数> --allow-full-episode
 ```
 
-如果当前模型或视频工具一次吃不下整集，改用：
+如果当前模型或视频工具一次吃不下整集，改用分场 / 分镜链路：
 
 ```bash
 python3 scripts/episode_pipeline.py compose-scenes <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py compose-shots <项目目录> --episode-num <集数> --scene-num <场景号> --shot-num <镜头号>
-python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <集数>
 ```
 
 `compose-scenes` 会在 `runtime/episode-XXXX/scene-YY/` 下生成单场 Prompt Pack，并要求当前场只输出“当前场摘要 + 严格按 `0-5秒 / 5-10秒 / 10-15秒` 连续切开的镜头单元表”，不准再写长场景正文。
@@ -190,7 +189,26 @@ python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <
 
 即使不传 `--shot-num`，`compose-shots` 也只能生成 1 个“下一个缺失镜头”的 prompt，不会把整场镜头一次性吐完。
 
-4. 如果要交付完整剧本，必须满足：
+默认交付就停在 `runtime/episode-XXXX/scene-YY/` 目录下的 `scene.md / shot-001.md / shot-002.md ...`。只有老工具强制要求单文件时，才额外用 `stitch-scenes` 做兼容拼装。
+
+4. `task=repair` 或 `task=review` 时，先做结构门，再决定改哪些块：
+
+```bash
+python3 scripts/episode_pipeline.py check <剧本文件路径>
+python3 scripts/episode_pipeline.py review <剧本文件路径>
+python3 scripts/episode_pipeline.py check-shot <镜头文件路径>
+python3 scripts/episode_pipeline.py review-shot <镜头文件路径>
+python3 scripts/episode_pipeline.py consistency-check <项目目录> --episode-num <集数> --script-path <剧本文件路径>
+```
+
+- `check / review` 负责结构门
+- `check-shot / review-shot` 负责 5 秒单镜头结构门
+- `consistency-check` 只在知情状态、伏笔、分集目标可能跑偏时追加
+- 默认定向返修，不整集推倒重写
+- `task=resume` 时只修上下文，不自动开写新一集
+- `task=submission` 时只补投稿交付物，不强制跑单集创作链路
+
+5. 如果要交付完整剧本，必须满足：
    - 交付的是剧本格式，不是小说段落
    - 默认 4-5 个场景
    - 独立地点切换默认不超过 3 次
@@ -200,7 +218,12 @@ python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <
    - 如果下游视频工具只能生成 5 秒镜头，镜头表必须严格拆成连续 5 秒单元，不要把剧情绑死在单个长镜头里
    - 首场景写主角完整外貌，后续只写服装变化
 
-5. 写完后必须先跑：
+6. `finish` / `apply-state-diff` 不是所有任务的默认收尾，只在下面两类情况执行：
+
+- 用户明确要求“定稿 / 归档 / 回写状态 / 同步状态文件”
+- 当前任务天然就是最终交付，且你已经确认要把这次变动持久化到长期状态
+
+对应 CLI：
 
 ```bash
 python3 scripts/episode_pipeline.py check <剧本文件路径>
@@ -208,11 +231,13 @@ python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件
 python3 scripts/episode_pipeline.py apply-state-diff <项目目录> --episode-num <集数>
 ```
 
-6. `finish` 会把最终剧本自动归档到 `episodes/episode-XXXX.md`，再更新 `task_log.md`、`state/剧集历史.md`，并在 `state/pending/episode-XXXX.state-diff.json` 产出可编辑的状态 diff，同时往 `state/角色状态.md`、`state/伏笔列表.md` 写入“待确认回写”提醒。
-7. 检查或补完 `state diff` 后，再跑 `apply-state-diff`，把确认后的状态写回 Markdown 表格；它会先留 `.bak` 备份，再清掉当前集的“待确认回写”提醒。
-8. 如果 `preflight` 失败，必须先补文件或替换模板占位；禁止假装已经恢复上下文。
-9. 如果用户只要求改某一集的节奏、对白、卡点或格式，默认做定向返修，不整集推倒重写。
-10. 如果用户要求的是“拍摄版”而不是“AI 视频生成版”，优先遵守拍摄版场景经济性；如果用户要求的是“AI 视频生成版”，优先遵守结构化场景块和 3000 字符控制。
+执行规则：
+
+- 在草案、快修、单纯质检、状态梳理阶段，不自动持久化状态
+- `finish` 会归档剧本、更新历史并生成 `state diff`
+- `apply-state-diff` 会真的改写长期状态表；执行前必须确认是否要落盘
+- 如果 `preflight` 失败，必须先补文件或替换模板占位；禁止假装已经恢复上下文
+- 如果用户要求的是“拍摄版”而不是“AI 视频生成版”，优先遵守拍摄版场景经济性；如果用户要求的是“AI 视频生成版”，优先遵守结构化场景块和 3000 字符控制
 
 ## 违约信号
 
@@ -222,6 +247,8 @@ python3 scripts/episode_pipeline.py apply-state-diff <项目目录> --episode-nu
 - 输出成了小说、旁白散文或大段心理描写
 - 角色说出了自己不该知道的秘密
 - 每一句台词都不推动关系、冲突或信息
+- 把仓库 CLI 当成 skill 的前置条件
+- 把 `finish` / `apply-state-diff` 当成任意任务的默认收尾
 - 没跑结构检查，或没人工复核卡点 / 爽点 / 知情状态就宣称可用
 - 用户只要局部修改，却整集重写
 - 忘记更新 `state/角色状态.md`、`state/伏笔列表.md` 或 `state/剧集历史.md`
@@ -339,10 +366,15 @@ python3 scripts/episode_pipeline.py apply-state-diff <项目目录> --episode-nu
    - `【环境空镜Xs】`
    - `(主体) / (环境) / (动作) / (光影) / (镜头) / (画质)`
    - `台词:`
-2. 台词只保留对话和停顿，不夹动作和语速说明。
-3. `VO` 只在人物出现在画面中时使用；`OS` 只在人物不在画面中但有声音时使用。
-4. 默认去掉空行和 `---` 分隔符，优先让剧本适配 3000 字符限制。
-5. 如果用户明确要传统拍摄剧本，可切换到“场次号 + 日/夜 + 内/外 + 出场人物”的制片版，但仍然禁止小说化描写。
+2. 如果当前任务是严格 5 秒单镜头交付，切换成：
+   - `镜头X: 地点(0-5秒)`
+   - `(主体) / (环境) / (动作) / (光影) / (镜头) / (画质)`
+   - `台词:`
+3. 严格 5 秒单镜头模式下，不要再输出 `场景X: 地点(0-45秒)` 这种整场标题。
+4. 台词只保留对话和停顿，不夹动作和语速说明。
+5. `VO` 只在人物出现在画面中时使用；`OS` 只在人物不在画面中但有声音时使用。
+6. 默认去掉空行和 `---` 分隔符，优先让剧本适配 3000 字符限制。
+7. 如果用户明确要传统拍摄剧本，可切换到“场次号 + 日/夜 + 内/外 + 出场人物”的制片版，但仍然禁止小说化描写。
 
 具体差异优先读：
 
@@ -366,7 +398,7 @@ python3 scripts/episode_pipeline.py apply-state-diff <项目目录> --episode-nu
 
 - `references/final-response-template.md`
 
-## 推荐命令
+## 可选命令
 
 ```bash
 python3 scripts/episode_pipeline.py rules
@@ -380,11 +412,18 @@ python3 scripts/episode_pipeline.py plan <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py compose <项目目录> --episode-num <集数> --allow-full-episode
 python3 scripts/episode_pipeline.py compose-scenes <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py compose-shots <项目目录> --episode-num <集数> --scene-num <场景号> --shot-num <镜头号>
-python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py next-episode <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py check <剧本文件路径>
+python3 scripts/episode_pipeline.py check-shot <镜头文件路径>
 python3 scripts/episode_pipeline.py consistency-check <项目目录> --episode-num <集数> --script-path <剧本文件路径>
 python3 scripts/episode_pipeline.py finish <项目目录> <集数> <剧本文件路径> --summary "本集摘要"
 python3 scripts/episode_pipeline.py apply-state-diff <项目目录> --episode-num <集数>
 python3 scripts/episode_pipeline.py review <剧本文件路径>
+python3 scripts/episode_pipeline.py review-shot <镜头文件路径>
+```
+
+如果老工具强制要求单文件，再额外使用：
+
+```bash
+python3 scripts/episode_pipeline.py stitch-scenes <项目目录> --episode-num <集数>
 ```
